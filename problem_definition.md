@@ -21,6 +21,8 @@ GP Regression (RBF), threshold at 0.5. Sparse GP above ~10k pts.
 - Pixel accuracy ≥ 95%
 - Significant holes detected
 - Outliers: may be missed
+- Elapsed time ≤ 10 s (50×200 grid)
+- Peak memory ≤ 100 MB (50×200 grid)
 
 ## Algorithm
 1. Space-filling init (Sobol/LHS)
@@ -36,3 +38,4 @@ GP Regression (RBF), threshold at 0.5. Sparse GP above ~10k pts.
 - Min hole size threshold?
 - Hard budget vs. convergence stopping?
 - Boundary/interior sampling ratio?
+- sklearn dense GP failed perf constraints (~160 s, ~700 MB on 50×200); Sparse GP under consideration
