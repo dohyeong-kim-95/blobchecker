@@ -18,7 +18,8 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, WhiteKernel, ConstantKernel
 
 
-Oracle = Callable[[int, int], int]   # f(row, col) -> {0, 1}
+Oracle         = Callable[[int, int], int]                      # f(row, col) -> {0,1}
+CheckpointFn   = Callable[[int, np.ndarray], None]              # f(n_sampled, pred_map)
 
 
 # ---------------------------------------------------------------------------
@@ -34,14 +35,17 @@ class BaseEstimator(ABC):
         oracle: Oracle,
         grid_size: tuple[int, int],
         budget: int | None = None,
+        checkpoint_fn: CheckpointFn | None = None,
     ) -> np.ndarray:
         """Query oracle sequentially and return predicted binary map.
 
         Parameters
         ----------
-        oracle    : deterministic f(row, col) -> {0, 1}
-        grid_size : (H, W)
-        budget    : total oracle calls; defaults to 15 % of H*W
+        oracle        : deterministic f(row, col) -> {0, 1}
+        grid_size     : (H, W)
+        budget        : total oracle calls; defaults to 15 % of H*W
+        checkpoint_fn : optional callback(n_sampled, predicted_map) called
+                        after every GP refit (i.e. every refit_interval steps)
 
         Returns
         -------
@@ -92,6 +96,7 @@ class StraddleGPR(BaseEstimator):
         oracle: Oracle,
         grid_size: tuple[int, int],
         budget: int | None = None,
+        checkpoint_fn: CheckpointFn | None = None,
     ) -> np.ndarray:
         H, W = grid_size
         total = H * W
@@ -129,6 +134,13 @@ class StraddleGPR(BaseEstimator):
         gp.fit(X, y)
         n_sampled = n_init
 
+        def _predict_map() -> np.ndarray:
+            mu = gp.predict(coords)
+            return (mu >= 0.5).astype(np.uint8).reshape(H, W)
+
+        if checkpoint_fn is not None:
+            checkpoint_fn(n_sampled, _predict_map())
+
         # ---- adaptive loop ----
         while n_sampled < budget:
             unsampled = np.where(~sampled)[0]
@@ -151,6 +163,8 @@ class StraddleGPR(BaseEstimator):
             n_sampled += len(order)
             gp.fit(X, y)
 
+            if checkpoint_fn is not None:
+                checkpoint_fn(n_sampled, _predict_map())
+
         # ---- final prediction ----
-        mu_all = gp.predict(coords)
-        return (mu_all >= 0.5).astype(np.uint8).reshape(H, W)
+        return _predict_map()

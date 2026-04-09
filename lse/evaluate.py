@@ -1,10 +1,19 @@
 """
 lse/evaluate.py
-Run StraddleGPR on a synthetic map and report accuracy.
+Run StraddleGPR on a synthetic map and report results.
+
+Outputs (all written to --out-dir, default lse/output/)
+-------
+  truth.png          ground truth binary map
+  predicted.png      final predicted binary map
+  accuracy_curve.png accuracy vs samples (measured every refit_interval steps)
+
+Printed
+-------
+  final pixel accuracy, peak memory, elapsed time
 
 Usage
 -----
-    # from repo root
     python lse/evaluate.py
     python lse/evaluate.py --blob_size 0.4 --n_holes 3 --hole_size 6 \
                            --n_outliers 15 --seed 7 --kappa 1.5
@@ -16,20 +25,61 @@ import argparse
 import resource
 import sys
 import time
-from pathlib import Path
-
 import warnings
+from pathlib import Path
 
 import numpy as np
 
 warnings.filterwarnings("ignore", category=UserWarning)   # sklearn ConvergenceWarning
 
-# Allow running from repo root or from inside lse/
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from raw.synth.synthetic_map import generate_map
 from lse.lse import StraddleGPR
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _save_binary_png(arr: np.ndarray, path: Path, title: str) -> None:
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(10, 2.5), dpi=110)
+    ax.imshow(arr, cmap="gray", vmin=0, vmax=1, aspect="auto",
+              interpolation="nearest")
+    ax.set_title(title)
+    ax.axis("off")
+    fig.tight_layout()
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _save_accuracy_curve(
+    steps: list[int],
+    accuracies: list[float],
+    budget: int,
+    path: Path,
+) -> None:
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(7, 4), dpi=110)
+    ax.plot(steps, [a * 100 for a in accuracies], marker="o", markersize=3,
+            linewidth=1.5, color="steelblue")
+    ax.axhline(95, color="crimson", linewidth=1, linestyle="--", label="95% target")
+    ax.set_xlabel("Samples queried")
+    ax.set_ylabel("Pixel accuracy (%)")
+    ax.set_title("Accuracy vs samples  (StraddleGPR)")
+    ax.set_xlim(0, budget)
+    ax.set_ylim(0, 101)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Main runner
+# ---------------------------------------------------------------------------
 
 def run(
     blob_size: float = 0.35,
@@ -39,8 +89,11 @@ def run(
     seed: int = 42,
     kappa: float = 1.5,
     refit_interval: int = 50,
-    out: str = "lse/result.png",
+    out_dir: str = "lse/output",
 ) -> dict:
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
     # ---- ground truth ----
     truth = generate_map(
         blob_size=blob_size, n_holes=n_holes, hole_size=hole_size,
@@ -53,63 +106,56 @@ def run(
     print(f"Budget      : {budget} samples  (15%)")
     print(f"Truth cover : {truth.mean():.2%}")
 
-    # ---- oracle wraps ground truth ----
+    _save_binary_png(truth, out / "truth.png",
+                     f"Ground truth  (coverage {truth.mean():.2%})")
+    print(f"Saved       → {out}/truth.png")
+
+    # ---- checkpoint tracking ----
+    steps: list[int] = []
+    accuracies: list[float] = []
+
+    def on_checkpoint(n_sampled: int, pred: np.ndarray) -> None:
+        acc = float((pred == truth).mean())
+        steps.append(n_sampled)
+        accuracies.append(acc)
+
+    # ---- oracle ----
     def oracle(row: int, col: int) -> int:
         return int(truth[row, col])
 
     # ---- estimate ----
     est = StraddleGPR(kappa=kappa, refit_interval=refit_interval)
     t0 = time.perf_counter()
-    predicted = est.fit(oracle, (H, W), budget=budget)
+    predicted = est.fit(oracle, (H, W), budget=budget, checkpoint_fn=on_checkpoint)
     elapsed = time.perf_counter() - t0
-    peak_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss  # KiB on Linux
+    peak_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 
     accuracy = float((predicted == truth).mean())
+
+    # ---- outputs ----
+    _save_binary_png(predicted, out / "predicted.png",
+                     f"StraddleGPR prediction  (acc {accuracy:.2%})")
+    print(f"Saved       → {out}/predicted.png")
+
+    _save_accuracy_curve(steps, accuracies, budget, out / "accuracy_curve.png")
+    print(f"Saved       → {out}/accuracy_curve.png")
+
     print(f"Pixel acc   : {accuracy:.2%}")
     print(f"Elapsed     : {elapsed:.1f} s")
     print(f"Peak memory : {peak_kb / 1024:.1f} MiB")
 
-    # ---- visualise ----
-    _save_png(truth, predicted, accuracy, elapsed, out)
-    print(f"Saved PNG   → {out}")
+    return {
+        "accuracy": accuracy,
+        "elapsed": elapsed,
+        "peak_mib": peak_kb / 1024,
+        "steps": steps,
+        "accuracies": accuracies,
+    }
 
-    return {"accuracy": accuracy, "elapsed": elapsed, "peak_mib": peak_kb / 1024}
 
-
-def _save_png(
-    truth: np.ndarray,
-    predicted: np.ndarray,
-    accuracy: float,
-    elapsed: float,
-    path: str,
-) -> None:
-    import matplotlib.pyplot as plt
-
-    error = (predicted != truth).astype(np.uint8)
-
-    fig, axes = plt.subplots(1, 3, figsize=(16, 3), dpi=110)
-
-    axes[0].imshow(truth, cmap="gray", vmin=0, vmax=1,
-                   aspect="auto", interpolation="nearest")
-    axes[0].set_title("Ground Truth")
-    axes[0].axis("off")
-
-    axes[1].imshow(predicted, cmap="gray", vmin=0, vmax=1,
-                   aspect="auto", interpolation="nearest")
-    axes[1].set_title(f"StraddleGPR  acc={accuracy:.2%}  t={elapsed:.1f}s")
-    axes[1].axis("off")
-
-    axes[2].imshow(error, cmap="Reds", vmin=0, vmax=1,
-                   aspect="auto", interpolation="nearest")
-    axes[2].set_title(f"Errors  ({error.sum()} px)")
-    axes[2].axis("off")
-
-    fig.tight_layout()
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, bbox_inches="tight")
-    import matplotlib.pyplot as _plt
-    _plt.close(fig)
-
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Evaluate StraddleGPR on synthetic map.")
@@ -120,7 +166,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--seed",           type=int,   default=42)
     p.add_argument("--kappa",          type=float, default=1.5)
     p.add_argument("--refit_interval", type=int,   default=50)
-    p.add_argument("--out",            type=str,   default="lse/result.png")
+    p.add_argument("--out-dir",        type=str,   default="lse/output",
+                   dest="out_dir")
     return p.parse_args()
 
 
@@ -134,5 +181,5 @@ if __name__ == "__main__":
         seed=args.seed,
         kappa=args.kappa,
         refit_interval=args.refit_interval,
-        out=args.out,
+        out_dir=args.out_dir,
     )
