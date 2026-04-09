@@ -13,6 +13,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import resource
 import sys
 import time
 from pathlib import Path
@@ -61,16 +62,18 @@ def run(
     t0 = time.perf_counter()
     predicted = est.fit(oracle, (H, W), budget=budget)
     elapsed = time.perf_counter() - t0
+    peak_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss  # KiB on Linux
 
     accuracy = float((predicted == truth).mean())
     print(f"Pixel acc   : {accuracy:.2%}")
     print(f"Elapsed     : {elapsed:.1f} s")
+    print(f"Peak memory : {peak_kb / 1024:.1f} MiB")
 
     # ---- visualise ----
     _save_png(truth, predicted, accuracy, elapsed, out)
     print(f"Saved PNG   → {out}")
 
-    return {"accuracy": accuracy, "elapsed": elapsed}
+    return {"accuracy": accuracy, "elapsed": elapsed, "peak_mib": peak_kb / 1024}
 
 
 def _save_png(
