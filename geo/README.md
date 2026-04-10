@@ -28,17 +28,27 @@ for row in 0..H:
 
 Cost: H × ⌈log₂ W⌉ ≈ 50 × 8 = 400 samples.
 
-### Phase 2 — Blob extent per row (~640 samples)
+### Phase 2 — Blob extent per row (~600 samples)
 
-For each seeded row, binary-search left and right from the seed to find
-the full horizontal span of the blob:
+For each seeded row, binary-search left and right from the seed, then probe
+rightward at `probe_step=20` to find additional runs (right wings):
 
 ```
 left_edge  = binary_search_left(row, 0,         seed_col)
 right_edge = binary_search_right(row, seed_col, W-1)
+# check if seed is at run boundary (pixel to its left is 0)
+# if so: left_edge..seed_col-1 is a separate left run — fill independently
+# probe right at +20 steps to catch further runs; binary-search each
 ```
 
+Per-run fill avoids large false-positive gap regions between disjoint runs.
 Cost: H_seeded × 2 × log₂(W) ≈ 40 × 16 = 640 samples.
+
+### Phase 2.5 — Downward extension (a few samples)
+
+After Phase 2, probe downward from the last seeded row using the midpoint
+of the previous row's span.  This recovers rows missed by Phase 1 when the
+blob is confined to extreme columns (non-monotone binary-search failure).
 
 ### Phase 3 — Interior fill (0 samples)
 
@@ -113,7 +123,7 @@ and `sparse_gp.SparseStraddleGPR` and is a drop-in replacement for evaluation.
 |--------|----------|------|--------|
 | StraddleGPR (dense) | 98.6 % | 158 s | 700 MiB |
 | SparseStraddleGPR | 95.8 % | 7.8 s | ~150 MiB |
-| **GeoEstimator** | **96.7 %** | **< 0.1 s** | **< 100 MiB** |
+| **GeoEstimator** | **99.4 %** | **< 0.1 s** | **< 100 MiB** |
 
 GeoEstimator achieves the best time and memory profile by replacing all
 probabilistic modelling with deterministic geometry queries.  Accuracy is
