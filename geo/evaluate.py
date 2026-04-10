@@ -82,7 +82,7 @@ def _save_summary(
     ax_c = fig.add_subplot(gs[2, 0])
     ax_c.plot(steps, [a * 100 for a in accuracies], marker="o", markersize=3,
               linewidth=1.5, color="seagreen")
-    ax_c.axhline(95, color="crimson", linewidth=1, linestyle="--", label="95% target")
+    ax_c.axhline(97.5, color="crimson", linewidth=1, linestyle="--", label="97.5% target")
     ax_c.set_xlabel("Samples queried")
     ax_c.set_ylabel("Pixel accuracy (%)")
     ax_c.set_title("Accuracy vs samples")
@@ -121,7 +121,7 @@ def _save_accuracy_curve(
     fig, ax = plt.subplots(figsize=(7, 4), dpi=110)
     ax.plot(steps, [a * 100 for a in accuracies], marker="o", markersize=3,
             linewidth=1.5, color="seagreen")
-    ax.axhline(95, color="crimson", linewidth=1, linestyle="--", label="95% target")
+    ax.axhline(97.5, color="crimson", linewidth=1, linestyle="--", label="97.5% target")
     ax.set_xlabel("Samples queried")
     ax.set_ylabel("Pixel accuracy (%)")
     ax.set_title("Accuracy vs samples  (GeoEstimator)")

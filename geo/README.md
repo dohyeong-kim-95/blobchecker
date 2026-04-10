@@ -9,7 +9,7 @@ budget.
 
 | Metric | Value | Target |
 |--------|-------|--------|
-| Pixel accuracy | **96.7 %** | ≥ 95 % |
+| Pixel accuracy | **96.7 %** | ≥ 97.5 % (stretch) |
 | Elapsed time | **< 0.1 s** | ≤ 10 s |
 | Peak memory | **< 100 MiB** | ≤ 100 MiB |
 | Samples used | 1 500 (15 %) | 15 % budget |
@@ -117,4 +117,5 @@ and `sparse_gp.SparseStraddleGPR` and is a drop-in replacement for evaluation.
 GeoEstimator achieves the best time and memory profile by replacing all
 probabilistic modelling with deterministic geometry queries.  Accuracy is
 competitive because the blobs in the synthetic map are spatially coherent
-and well-suited to scanline reconstruction.
+and well-suited to scanline reconstruction, but the current implementation
+still misses some right-side regions when row extents are dented by holes.
