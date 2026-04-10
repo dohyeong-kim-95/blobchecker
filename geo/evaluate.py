@@ -55,12 +55,13 @@ def _save_binary_png(arr: np.ndarray, path: Path, title: str) -> None:
 def _save_summary(
     truth: np.ndarray,
     predicted: np.ndarray,
-    accuracy: float,
-    elapsed: float,
-    peak_mib: float,
+    avg_accuracy: float,
+    max_elapsed: float,
+    max_peak_mib: float,
     steps: list[int],
     accuracies: list[float],
     budget: int,
+    n_trials: int,
     path: Path,
 ) -> None:
     import matplotlib.pyplot as plt
@@ -76,13 +77,13 @@ def _save_summary(
     ax_p = fig.add_subplot(gs[1, :])
     ax_p.imshow(predicted, cmap="gray", vmin=0, vmax=1, aspect="auto",
                 interpolation="nearest")
-    ax_p.set_title(f"GeoEstimator Prediction  (acc {accuracy:.2%})", fontsize=10)
+    ax_p.set_title(f"GeoEstimator Prediction  (sample acc {float((predicted == truth).mean()):.2%})", fontsize=10)
     ax_p.axis("off")
 
     ax_c = fig.add_subplot(gs[2, 0])
     ax_c.plot(steps, [a * 100 for a in accuracies], marker="o", markersize=3,
               linewidth=1.5, color="seagreen")
-    ax_c.axhline(95, color="crimson", linewidth=1, linestyle="--", label="95% target")
+    ax_c.axhline(97.5, color="crimson", linewidth=1, linestyle="--", label="97.5% target")
     ax_c.set_xlabel("Samples queried")
     ax_c.set_ylabel("Pixel accuracy (%)")
     ax_c.set_title("Accuracy vs samples")
@@ -96,10 +97,11 @@ def _save_summary(
     ax_m.text(
         0.08, 0.92,
         f"Method    : GeoEstimator\n"
-        f"Pixel acc : {accuracy:.2%}\n"
+        f"Trials    : {n_trials}\n"
+        f"Pixel acc : {avg_accuracy:.2%} (avg)\n"
         f"Budget    : {budget} samples (15%)\n"
-        f"Elapsed   : {elapsed:.2f} s\n"
-        f"Peak mem  : {peak_mib:.1f} MiB\n"
+        f"Elapsed   : {max_elapsed:.2f} s (max)\n"
+        f"Peak mem  : {max_peak_mib:.1f} MiB (max)\n"
         f"Grid      : {truth.shape[0]}×{truth.shape[1]}",
         va="top", ha="left", fontsize=9, fontfamily="monospace",
         transform=ax_m.transAxes,
@@ -121,7 +123,7 @@ def _save_accuracy_curve(
     fig, ax = plt.subplots(figsize=(7, 4), dpi=110)
     ax.plot(steps, [a * 100 for a in accuracies], marker="o", markersize=3,
             linewidth=1.5, color="seagreen")
-    ax.axhline(95, color="crimson", linewidth=1, linestyle="--", label="95% target")
+    ax.axhline(97.5, color="crimson", linewidth=1, linestyle="--", label="97.5% target")
     ax.set_xlabel("Samples queried")
     ax.set_ylabel("Pixel accuracy (%)")
     ax.set_title("Accuracy vs samples  (GeoEstimator)")
@@ -145,69 +147,94 @@ def run(
     n_outliers: int = 10,
     seed: int = 42,
     checkpoint_interval: int = 50,
+    n_trials: int = 3,
     out_dir: str = "geo/output",
 ) -> dict:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    # ---- ground truth ----
-    truth = generate_map(
-        blob_size=blob_size, n_holes=n_holes, hole_size=hole_size,
-        n_outliers=n_outliers, seed=seed,
-    )
+    truths: list[np.ndarray] = []
+    preds: list[np.ndarray] = []
+    trial_accuracies: list[float] = []
+    trial_elapsed: list[float] = []
+    trial_peak_mib: list[float] = []
+    step_to_acc: dict[int, list[float]] = {}
+
+    # ---- run N independent blobs ----
+    for trial in range(n_trials):
+        trial_seed = seed + trial
+        truth = generate_map(
+            blob_size=blob_size, n_holes=n_holes, hole_size=hole_size,
+            n_outliers=n_outliers, seed=trial_seed,
+        )
+        H, W = truth.shape
+        budget = int(0.15 * H * W)
+        trial_steps: list[int] = []
+        trial_acc: list[float] = []
+
+        def on_checkpoint(n_sampled: int, pred: np.ndarray) -> None:
+            acc = float((pred == truth).mean())
+            trial_steps.append(n_sampled)
+            trial_acc.append(acc)
+
+        def oracle(row: int, col: int) -> int:
+            return int(truth[row, col])
+
+        print(f"[trial {trial + 1}/{n_trials}] seed={trial_seed}  grid={H}×{W}  budget={budget}")
+        est = GeoEstimator(checkpoint_interval=checkpoint_interval)
+        t0 = time.perf_counter()
+        predicted = est.fit(oracle, (H, W), budget=budget, checkpoint_fn=on_checkpoint)
+        elapsed = time.perf_counter() - t0
+        peak_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+
+        acc = float((predicted == truth).mean())
+        trial_accuracies.append(acc)
+        trial_elapsed.append(elapsed)
+        trial_peak_mib.append(peak_kb / 1024)
+        truths.append(truth)
+        preds.append(predicted)
+
+        for s, a in zip(trial_steps, trial_acc):
+            step_to_acc.setdefault(s, []).append(a)
+
+    # ---- aggregate metrics ----
+    avg_accuracy = float(np.mean(trial_accuracies))
+    max_elapsed = float(np.max(trial_elapsed))
+    max_peak_mib = float(np.max(trial_peak_mib))
+    steps = sorted(step_to_acc)
+    accuracies = [float(np.mean(step_to_acc[s])) for s in steps]
+
+    # representative images: first trial
+    truth = truths[0]
+    predicted = preds[0]
     H, W = truth.shape
     budget = int(0.15 * H * W)
-
-    print(f"Grid        : {H}×{W}  ({H*W} pixels)")
-    print(f"Budget      : {budget} samples  (15%)")
-    print(f"Truth cover : {truth.mean():.2%}")
-
-    _save_binary_png(truth, out / "truth.png",
-                     f"Ground truth  (coverage {truth.mean():.2%})")
-    print(f"Saved       → {out}/truth.png")
-
-    # ---- checkpoint tracking ----
-    steps: list[int] = []
-    accuracies: list[float] = []
-
-    def on_checkpoint(n_sampled: int, pred: np.ndarray) -> None:
-        acc = float((pred == truth).mean())
-        steps.append(n_sampled)
-        accuracies.append(acc)
-
-    # ---- oracle ----
-    def oracle(row: int, col: int) -> int:
-        return int(truth[row, col])
-
-    # ---- estimate ----
-    est = GeoEstimator(checkpoint_interval=checkpoint_interval)
-    t0 = time.perf_counter()
-    predicted = est.fit(oracle, (H, W), budget=budget, checkpoint_fn=on_checkpoint)
-    elapsed = time.perf_counter() - t0
-    peak_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-
-    accuracy = float((predicted == truth).mean())
+    print(f"Aggregate    : avg_acc={avg_accuracy:.2%}  max_elapsed={max_elapsed:.2f}s  max_peak={max_peak_mib:.1f}MiB")
 
     # ---- outputs ----
     _save_binary_png(predicted, out / "predicted.png",
-                     f"GeoEstimator prediction  (acc {accuracy:.2%})")
+                     f"GeoEstimator prediction  (trial1 acc {trial_accuracies[0]:.2%})")
     print(f"Saved       → {out}/predicted.png")
+
+    _save_binary_png(truth, out / "truth.png",
+                     f"Ground truth (trial1 coverage {truth.mean():.2%})")
+    print(f"Saved       → {out}/truth.png")
 
     _save_accuracy_curve(steps, accuracies, budget, out / "accuracy_curve.png")
     print(f"Saved       → {out}/accuracy_curve.png")
 
-    _save_summary(truth, predicted, accuracy, elapsed, peak_kb / 1024,
-                  steps, accuracies, budget, out / "summary.png")
+    _save_summary(truth, predicted, avg_accuracy, max_elapsed, max_peak_mib,
+                  steps, accuracies, budget, n_trials, out / "summary.png")
     print(f"Saved       → {out}/summary.png")
 
-    print(f"Pixel acc   : {accuracy:.2%}")
-    print(f"Elapsed     : {elapsed:.1f} s")
-    print(f"Peak memory : {peak_kb / 1024:.1f} MiB")
+    print(f"Pixel acc   : {avg_accuracy:.2%}  (avg over {n_trials})")
+    print(f"Elapsed     : {max_elapsed:.2f} s  (max)")
+    print(f"Peak memory : {max_peak_mib:.1f} MiB  (max)")
 
     return {
-        "accuracy": accuracy,
-        "elapsed": elapsed,
-        "peak_mib": peak_kb / 1024,
+        "accuracy": avg_accuracy,
+        "elapsed": max_elapsed,
+        "peak_mib": max_peak_mib,
         "steps": steps,
         "accuracies": accuracies,
     }
@@ -225,6 +252,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--n_outliers",          type=int,   default=10)
     p.add_argument("--seed",                type=int,   default=42)
     p.add_argument("--checkpoint_interval", type=int,   default=50)
+    p.add_argument("--n-trials",            type=int,   default=3, dest="n_trials")
     p.add_argument("--out-dir",             type=str,   default="geo/output",
                    dest="out_dir")
     return p.parse_args()
@@ -239,5 +267,6 @@ if __name__ == "__main__":
         n_outliers=args.n_outliers,
         seed=args.seed,
         checkpoint_interval=args.checkpoint_interval,
+        n_trials=args.n_trials,
         out_dir=args.out_dir,
     )

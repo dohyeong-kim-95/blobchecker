@@ -5,13 +5,13 @@ model — only the oracle is queried, and geometry (scanline binary search +
 BFS hole flooding) is used to reconstruct the map within a 15 % sample
 budget.
 
-## Results on default 50×200 map
+## Results on default 50×200 map (3 blobs aggregate)
 
 | Metric | Value | Target |
 |--------|-------|--------|
-| Pixel accuracy | **99.4 %** | ≥ 97.5 % |
-| Elapsed time | **< 0.1 s** | ≤ 10 s |
-| Peak memory | **< 100 MiB** | ≤ 100 MiB |
+| Pixel accuracy | **(run-dependent)** average over 3 blobs | ≥ 97.5 % (stretch) |
+| Elapsed time | **max over 3 blobs** | ≤ 10 s |
+| Peak memory | **max over 3 blobs** | ≤ 100 MiB |
 | Samples used | 1 500 (15 %) | 15 % budget |
 
 ## Algorithm
@@ -91,6 +91,7 @@ geo/
 
 ```bash
 python geo/evaluate.py
+python geo/evaluate.py --n-trials 3
 
 # custom map
 python geo/evaluate.py --blob_size 0.4 --n_holes 3 --hole_size 6 \
@@ -127,4 +128,5 @@ and `sparse_gp.SparseStraddleGPR` and is a drop-in replacement for evaluation.
 GeoEstimator achieves the best time and memory profile by replacing all
 probabilistic modelling with deterministic geometry queries.  Accuracy is
 competitive because the blobs in the synthetic map are spatially coherent
-and well-suited to scanline reconstruction.
+and well-suited to scanline reconstruction, but the current implementation
+still misses some right-side regions when row extents are dented by holes.

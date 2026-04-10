@@ -119,14 +119,46 @@ class GeoEstimator(BaseEstimator):
     def __init__(
         self,
         checkpoint_interval: int = 50,
-        hole_grid_steps: tuple[int, int] = (3, 8),
-        probe_step: int = 20,
-        max_retries: int = 2,
+        hole_grid_steps: tuple[int, int] = (4, 10),
+        extent_smooth_window: int = 2,
     ) -> None:
         self.checkpoint_interval = checkpoint_interval
         self.hole_grid_steps = hole_grid_steps
-        self.probe_step = probe_step
-        self.max_retries = max_retries
+        self.extent_smooth_window = extent_smooth_window
+
+    def _smooth_row_extents(
+        self,
+        row_extents: dict[int, tuple[int, int]],
+        H: int,
+    ) -> dict[int, tuple[int, int]]:
+        """Bridge local edge dents caused by interior holes.
+
+        Phase 2 finds per-row extents from one seed. When a row intersects a
+        hole, binary-search extents can collapse inward and miss the right-side
+        1-region.  We smooth extents using neighbouring rows to recover the
+        outer blob envelope before Phase 3 fill.
+        """
+        if not row_extents:
+            return row_extents
+
+        rows = sorted(row_extents)
+        min_row, max_row = rows[0], rows[-1]
+        w = max(0, self.extent_smooth_window)
+
+        smoothed: dict[int, tuple[int, int]] = {}
+        for row in range(min_row, max_row + 1):
+            lefts: list[int] = []
+            rights: list[int] = []
+            for rr in range(max(0, row - w), min(H - 1, row + w) + 1):
+                if rr in row_extents:
+                    l, r = row_extents[rr]
+                    lefts.append(l)
+                    rights.append(r)
+
+            if lefts and rights:
+                smoothed[row] = (min(lefts), max(rights))
+
+        return smoothed
 
     # ------------------------------------------------------------------
     # Public
@@ -336,11 +368,9 @@ class GeoEstimator(BaseEstimator):
 
             row_runs[row] = runs
 
-        for row, seed_col in row_seeds.items():
-            _find_extents_for_row(row, seed_col)
+        # Hole-crossing rows can get shrunken extents; smooth by neighbours.
+        row_extents = self._smooth_row_extents(row_extents, H)
 
-        # ----------------------------------------------------------------
-        # Phase 2.5 – Downward extension
         # ----------------------------------------------------------------
         # Phase 1 binary search is non-monotone: if the blob for a row is
         # confined to extreme columns, the midpoint probes may all land in
