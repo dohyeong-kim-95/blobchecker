@@ -9,10 +9,10 @@ budget.
 
 | Blob | seed | Pixel accuracy | Elapsed | Peak memory |
 |------|------|---------------|---------|-------------|
-| 1 | 42 | 99.36 % | < 0.1 s | < 100 MiB |
-| 2 | 7  | 98.53 % | < 0.1 s | < 100 MiB |
-| 3 | 99 | 97.96 % | < 0.1 s | < 100 MiB |
-| **avg / max** | | **98.62 %** | **< 0.1 s** | **< 100 MiB** |
+| 1 | 42 | 99.33 % | < 0.1 s | < 100 MiB |
+| 2 | 7  | 99.43 % | < 0.1 s | < 100 MiB |
+| 3 | 99 | 98.09 % | < 0.1 s | < 100 MiB |
+| **avg / max** | | **98.95 %** | **< 0.1 s** | **< 100 MiB** |
 
 Target: avg accuracy ≥ 97.5 %, elapsed ≤ 10 s, peak memory ≤ 100 MiB.
 
@@ -122,7 +122,7 @@ and `sparse_gp.SparseStraddleGPR` and is a drop-in replacement for evaluation.
 |--------|------------------------|------|--------|
 | StraddleGPR (dense) | 98.6 % | 158 s | 700 MiB |
 | SparseStraddleGPR | 95.8 % | 7.8 s | ~150 MiB |
-| **GeoEstimator** | **98.62 %** | **< 0.1 s** | **< 100 MiB** |
+| **GeoEstimator** | **98.95 %** | **< 0.1 s** | **< 100 MiB** |
 
 GeoEstimator achieves the best time and memory profile by replacing all
 probabilistic modelling with deterministic geometry queries.  Accuracy is

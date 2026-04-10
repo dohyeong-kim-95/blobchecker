@@ -274,26 +274,44 @@ class GeoEstimator(BaseEstimator):
                 # Seed is connected to left_edge — one block so far
                 seed_start = left_edge
 
-            # Probe rightward for additional runs beyond right_edge
-            cur_right = right_edge
-            pos = cur_right + self.probe_step
+            # Seed's own run (left boundary already handled above)
+            runs.append((seed_start, right_edge))
+
+            # Probe rightward for additional disjoint runs.
+            # Each hit is a SEPARATE span — we binary-search both its left
+            # and right edges so the inter-run gaps are NOT filled.
+            prev_right = right_edge
+            pos = prev_right + self.probe_step
             while pos <= W - 1 and budget_left() > 0:
                 if query(row, pos) == 1:
+                    # Binary search for left edge in (prev_right, pos]
+                    lo2, hi2 = prev_right + 1, pos
+                    run_left = pos
+                    while lo2 < hi2 and budget_left() > 0:
+                        mid2 = (lo2 + hi2) // 2
+                        if query(row, mid2) == 1:
+                            run_left = mid2
+                            hi2 = mid2
+                        else:
+                            lo2 = mid2 + 1
+                            run_left = lo2
+                    # Binary search for right edge in [pos, W-1]
                     lo2, hi2 = pos, W - 1
-                    cur_right = pos
+                    run_right = pos
                     while lo2 < hi2 and budget_left() > 0:
                         mid2 = (lo2 + hi2 + 1) // 2
                         if query(row, mid2) == 1:
-                            cur_right = mid2
+                            run_right = mid2
                             lo2 = mid2
                         else:
                             hi2 = mid2 - 1
-                            cur_right = lo2
-                    pos = cur_right + self.probe_step
+                            run_right = lo2
+                    runs.append((run_left, run_right))
+                    prev_right = run_right
+                    pos = run_right + self.probe_step
                 else:
                     pos += self.probe_step
 
-            runs.append((seed_start, cur_right))
             row_runs[row] = runs
 
         for row, seed_col in row_seeds.items():

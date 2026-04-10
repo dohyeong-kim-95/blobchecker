@@ -92,6 +92,18 @@ def _save_accuracy_curve(
     plt.close(fig)
 
 
+def _make_error_rgb(truth: np.ndarray, predicted: np.ndarray) -> np.ndarray:
+    """Return H×W×3 uint8 RGB: TP=white, TN=black, FP=red, FN=blue."""
+    rgb = np.zeros((*truth.shape, 3), dtype=np.uint8)
+    tp = (truth == 1) & (predicted == 1)
+    fp = (truth == 0) & (predicted == 1)
+    fn = (truth == 1) & (predicted == 0)
+    rgb[tp] = [220, 220, 220]   # light gray — correct blob
+    rgb[fp] = [220,  40,  40]   # red  — false alarm
+    rgb[fn] = [ 40,  80, 220]   # blue — missed
+    return rgb
+
+
 def _save_summary(
     results: list[dict],
     all_steps: list[list[int]],
@@ -101,23 +113,59 @@ def _save_summary(
     target: float = 97.5,
 ) -> None:
     import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
 
     n = len(results)
-    fig = plt.figure(figsize=(13, 3 * n + 4), dpi=110)
-    gs = fig.add_gridspec(n + 2, 2,
-                          height_ratios=[1] * n + [2, 2],
-                          hspace=0.55, wspace=0.25)
+    # 3 image rows per blob (truth / predicted / error) + curve row + table row
+    n_img_rows = 3 * n
+    fig = plt.figure(figsize=(13, n_img_rows * 1.3 + 5), dpi=110)
+    gs = fig.add_gridspec(
+        n_img_rows + 2, 1,
+        height_ratios=[1] * n_img_rows + [2.5, 1.8],
+        hspace=0.55,
+    )
+
+    legend_patches = [
+        Patch(color=[c/255 for c in [220, 220, 220]], label="TP"),
+        Patch(color=[c/255 for c in [  0,   0,   0]], label="TN"),
+        Patch(color=[c/255 for c in [220,  40,  40]], label="FP"),
+        Patch(color=[c/255 for c in [ 40,  80, 220]], label="FN"),
+    ]
 
     for i, res in enumerate(results):
-        ax = fig.add_subplot(gs[i, :])
-        ax.imshow(res["predicted"], cmap="gray", vmin=0, vmax=1,
-                  aspect="auto", interpolation="nearest")
-        ax.set_title(
-            f"Blob {i+1} (seed={BLOBS[i]['seed']})  acc={res['accuracy']:.2%}",
-            fontsize=9)
-        ax.axis("off")
+        truth = res["truth"]
+        predicted = res["predicted"]
+        fp = int(((truth == 0) & (predicted == 1)).sum())
+        fn = int(((truth == 1) & (predicted == 0)).sum())
+        error_rgb = _make_error_rgb(truth, predicted)
 
-    ax_c = fig.add_subplot(gs[n, :])
+        base = 3 * i
+
+        ax_t = fig.add_subplot(gs[base])
+        ax_t.imshow(truth, cmap="gray", vmin=0, vmax=1,
+                    aspect="auto", interpolation="nearest")
+        ax_t.set_title(
+            f"Blob {i+1} (seed={BLOBS[i]['seed']}) — Truth"
+            f"  coverage={truth.mean():.1%}", fontsize=8)
+        ax_t.axis("off")
+
+        ax_p = fig.add_subplot(gs[base + 1])
+        ax_p.imshow(predicted, cmap="gray", vmin=0, vmax=1,
+                    aspect="auto", interpolation="nearest")
+        ax_p.set_title(
+            f"Blob {i+1} — Predicted  acc={res['accuracy']:.2%}", fontsize=8)
+        ax_p.axis("off")
+
+        ax_e = fig.add_subplot(gs[base + 2])
+        ax_e.imshow(error_rgb, aspect="auto", interpolation="nearest")
+        ax_e.set_title(
+            f"Blob {i+1} — Error map  FP={fp}  FN={fn}", fontsize=8)
+        ax_e.legend(handles=legend_patches, loc="upper right",
+                    fontsize=6, framealpha=0.85)
+        ax_e.axis("off")
+
+    # Accuracy curve
+    ax_c = fig.add_subplot(gs[n_img_rows])
     for i, (steps, accs) in enumerate(zip(all_steps, all_accuracies)):
         ax_c.plot(steps, [a * 100 for a in accs],
                   marker="o", markersize=3, linewidth=1.5,
@@ -132,11 +180,12 @@ def _save_summary(
     ax_c.legend(fontsize=8)
     ax_c.grid(True, alpha=0.3)
 
-    avg_acc = np.mean([r["accuracy"] for r in results])
+    # Metrics table
+    avg_acc = float(np.mean([r["accuracy"] for r in results]))
     max_elapsed = max(r["elapsed"] for r in results)
     max_mem = max(r["peak_mib"] for r in results)
 
-    ax_m = fig.add_subplot(gs[n + 1, :])
+    ax_m = fig.add_subplot(gs[n_img_rows + 1])
     ax_m.axis("off")
     lines = [
         f"{'Blob':<6}  {'Accuracy':>9}  {'Elapsed':>9}  {'Peak mem':>10}",
