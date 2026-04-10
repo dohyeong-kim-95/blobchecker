@@ -121,10 +121,14 @@ class GeoEstimator(BaseEstimator):
         checkpoint_interval: int = 50,
         hole_grid_steps: tuple[int, int] = (4, 10),
         extent_smooth_window: int = 2,
+        probe_step: int = 20,
+        max_retries: int = 3,
     ) -> None:
         self.checkpoint_interval = checkpoint_interval
         self.hole_grid_steps = hole_grid_steps
         self.extent_smooth_window = extent_smooth_window
+        self.probe_step = probe_step
+        self.max_retries = max_retries
 
     def _smooth_row_extents(
         self,
@@ -368,8 +372,27 @@ class GeoEstimator(BaseEstimator):
 
             row_runs[row] = runs
 
+        # Phase 2: run extent-finding for all Phase 1 seeded rows
+        for row, seed_col in row_seeds.items():
+            if budget_left() <= 0:
+                break
+            _find_extents_for_row(row, seed_col)
+
         # Hole-crossing rows can get shrunken extents; smooth by neighbours.
+        row_extents: dict[int, tuple[int, int]] = {
+            row: (min(l for l, _ in runs), max(r for _, r in runs))
+            for row, runs in row_runs.items()
+        }
         row_extents = self._smooth_row_extents(row_extents, H)
+        # Apply smoothed extents back to row_runs (expand bounds where smoothing widened)
+        for row, (sl, sr) in row_extents.items():
+            if row not in row_runs:
+                row_runs[row] = [(sl, sr)]
+            else:
+                orig_l = min(l for l, _ in row_runs[row])
+                orig_r = max(r for _, r in row_runs[row])
+                if sl < orig_l or sr > orig_r:
+                    row_runs[row] = [(sl, sr)]
 
         # ----------------------------------------------------------------
         # Phase 1 binary search is non-monotone: if the blob for a row is
