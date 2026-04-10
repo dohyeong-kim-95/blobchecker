@@ -7,6 +7,7 @@ Outputs (written to --out-dir, default contour/output/)
   truth.png          ground truth binary map
   predicted.png      final predicted binary map
   accuracy_curve.png accuracy vs samples (every 50 steps)
+  summary.png        truth + predicted + accuracy curve in one image
 
 Printed
 -------
@@ -50,6 +51,65 @@ def _save_binary_png(arr: np.ndarray, path: Path, title: str) -> None:
     ax.set_title(title)
     ax.axis("off")
     fig.tight_layout()
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _save_summary(
+    truth: np.ndarray,
+    predicted: np.ndarray,
+    accuracy: float,
+    elapsed: float,
+    peak_mib: float,
+    steps: list[int],
+    accuracies: list[float],
+    budget: int,
+    path: Path,
+) -> None:
+    import matplotlib.pyplot as plt
+    fig = plt.figure(figsize=(12, 7), dpi=110)
+    gs = fig.add_gridspec(3, 2, height_ratios=[1, 1, 2], hspace=0.45, wspace=0.25)
+
+    ax_t = fig.add_subplot(gs[0, :])
+    ax_t.imshow(truth, cmap="gray", vmin=0, vmax=1, aspect="auto",
+                interpolation="nearest")
+    ax_t.set_title(f"Ground Truth  (coverage {truth.mean():.2%})", fontsize=10)
+    ax_t.axis("off")
+
+    ax_p = fig.add_subplot(gs[1, :])
+    ax_p.imshow(predicted, cmap="gray", vmin=0, vmax=1, aspect="auto",
+                interpolation="nearest")
+    ax_p.set_title(f"ContourEstimator Prediction  (acc {accuracy:.2%})", fontsize=10)
+    ax_p.axis("off")
+
+    ax_c = fig.add_subplot(gs[2, 0])
+    ax_c.plot(steps, [a * 100 for a in accuracies], marker="o", markersize=3,
+              linewidth=1.5, color="seagreen")
+    ax_c.axhline(95, color="crimson", linewidth=1, linestyle="--", label="95% target")
+    ax_c.set_xlabel("Samples queried")
+    ax_c.set_ylabel("Pixel accuracy (%)")
+    ax_c.set_title("Accuracy vs samples")
+    ax_c.set_xlim(0, budget)
+    ax_c.set_ylim(0, 101)
+    ax_c.legend(fontsize=8)
+    ax_c.grid(True, alpha=0.3)
+
+    ax_m = fig.add_subplot(gs[2, 1])
+    ax_m.axis("off")
+    ax_m.text(
+        0.08, 0.92,
+        f"Method    : ContourEstimator\n"
+        f"Pixel acc : {accuracy:.2%}\n"
+        f"Budget    : {budget} samples (15%)\n"
+        f"Elapsed   : {elapsed:.2f} s\n"
+        f"Peak mem  : {peak_mib:.1f} MiB\n"
+        f"Grid      : {truth.shape[0]}×{truth.shape[1]}",
+        va="top", ha="left", fontsize=9, fontfamily="monospace",
+        transform=ax_m.transAxes,
+        bbox=dict(boxstyle="round,pad=0.5", facecolor="#f5f5f5", edgecolor="#cccccc"),
+    )
+
+    fig.suptitle("ContourEstimator — Summary", fontsize=12, fontweight="bold")
     fig.savefig(path, bbox_inches="tight")
     plt.close(fig)
 
@@ -136,6 +196,10 @@ def run(
 
     _save_accuracy_curve(steps, accuracies, budget, out / "accuracy_curve.png")
     print(f"Saved       → {out}/accuracy_curve.png")
+
+    _save_summary(truth, predicted, accuracy, elapsed, peak_kb / 1024,
+                  steps, accuracies, budget, out / "summary.png")
+    print(f"Saved       → {out}/summary.png")
 
     print(f"Pixel acc   : {accuracy:.2%}")
     print(f"Elapsed     : {elapsed:.2f} s")
