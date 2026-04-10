@@ -113,6 +113,41 @@ def _save_summary(
     plt.close(fig)
 
 
+def _save_error_map(
+    truth: np.ndarray,
+    predicted: np.ndarray,
+    path: Path,
+) -> None:
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import ListedColormap
+    from matplotlib.patches import Patch
+
+    # 0=TN(black), 1=TP(white), 2=FP(red), 3=FN(blue)
+    error = np.zeros(truth.shape, dtype=np.uint8)
+    error[(truth == 1) & (predicted == 1)] = 1  # TP
+    error[(truth == 0) & (predicted == 1)] = 2  # FP
+    error[(truth == 1) & (predicted == 0)] = 3  # FN
+
+    cmap = ListedColormap(["#111111", "#eeeeee", "#e03030", "#3060e0"])
+    legend = [
+        Patch(color="#111111", label="TN"),
+        Patch(color="#eeeeee", label="TP"),
+        Patch(color="#e03030", label="FP (false alarm)"),
+        Patch(color="#3060e0", label="FN (missed)"),
+    ]
+
+    fig, ax = plt.subplots(figsize=(10, 2.5), dpi=110)
+    ax.imshow(error, cmap=cmap, vmin=0, vmax=3, aspect="auto", interpolation="nearest")
+    ax.legend(handles=legend, loc="upper right", fontsize=7, framealpha=0.85)
+    fp = int(((truth == 0) & (predicted == 1)).sum())
+    fn = int(((truth == 1) & (predicted == 0)).sum())
+    ax.set_title(f"Error map  (FP={fp}, FN={fn})", fontsize=10)
+    ax.axis("off")
+    fig.tight_layout()
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+
+
 def _save_accuracy_curve(
     steps: list[int],
     accuracies: list[float],
@@ -222,6 +257,9 @@ def run(
 
     _save_accuracy_curve(steps, accuracies, budget, out / "accuracy_curve.png")
     print(f"Saved       → {out}/accuracy_curve.png")
+
+    _save_error_map(truth, predicted, out / "error_map.png")
+    print(f"Saved       → {out}/error_map.png")
 
     _save_summary(truth, predicted, avg_accuracy, max_elapsed, max_peak_mib,
                   steps, accuracies, budget, n_trials, out / "summary.png")
