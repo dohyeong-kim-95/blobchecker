@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft 0.3
+Draft 0.4
 
 ## Purpose
 
@@ -28,23 +28,61 @@ The evaluator consumes:
 
 - `truth_blob_mask`: ground-truth meaningful blob tensor of shape `(8, H, W)`
 - `truth_outlier_mask`: optional external positive outlier tensor of shape `(8, H, W)`
-- `truth_full_mask`: full observed tensor, typically `truth_blob_mask | truth_outlier_mask`
+- `truth_full_mask`: full observed tensor, `truth_blob_mask | truth_outlier_mask`
 - `predictor`: an algorithm that selects one coordinate per iteration and
   consumes the 8-label observation vector returned at that coordinate
 - optional metadata describing implementation language, build mode, and
   runtime environment
 
-Conceptual oracle interface:
+The algorithm receives only the oracle interface:
 
 ```python
 query(row: int, col: int) -> np.ndarray  # shape (8,), dtype uint8
 ```
 
-Returned values are binary labels for all 8 blobs at the same coordinate.
+The algorithm does not have access to any truth tensor at any point.
 
 ---
 
-## 2. Required Predictor Output
+## 2. Evaluator Architecture
+
+The evaluator is a **separate component** from the algorithm.
+
+### 2.1 Callback contract
+
+At each iteration, the algorithm must provide its current prediction:
+
+```python
+# called by the evaluator at every iteration i
+predicted_blob_mask_i = algorithm.predict()  # shape (8, H, W), binary
+```
+
+The evaluator records this snapshot alongside the iteration index.
+
+### 2.2 Accuracy curve
+
+The evaluator computes per-layer blob accuracy at each iteration:
+
+```python
+blob_accuracy_k_i = mean(predicted_blob_mask_i[k] == truth_blob_mask[k])
+```
+
+This produces an accuracy curve of shape `(8, num_iterations)` that shows
+how reconstruction quality evolves as queries accumulate.
+
+### 2.3 Truth isolation
+
+The evaluator wraps the oracle so the algorithm can only call:
+
+```python
+query(row, col) -> truth_full_mask[:, row, col]
+```
+
+The algorithm cannot access `truth_blob_mask` or `truth_outlier_mask` directly.
+
+---
+
+## 3. Required Predictor Output
 
 A predictor run must produce at least:
 
@@ -61,7 +99,8 @@ predicted_outlier_mask.shape == (8, H, W)
 And the evaluation record must include:
 
 - `iterations_used`
-- `predicted_blob_mask`
+- `predicted_blob_mask` at final iteration
+- per-iteration accuracy curve for all 8 layers
 - optional `predicted_outlier_mask`
 - optional per-iteration trace for debugging and analysis
 - implementation metadata for the timing lane
@@ -73,9 +112,9 @@ mask for supplemental outlier metrics.
 
 ---
 
-## 3. Cost Model
+## 4. Cost Model
 
-### 3.1 Iteration accounting
+### 4.1 Iteration accounting
 
 One iteration is defined as:
 
@@ -83,6 +122,7 @@ One iteration is defined as:
 2. query that coordinate once
 3. observe 8 labels, one per blob
 4. update the estimator state
+5. produce an updated `predicted_blob_mask` (for evaluator callback)
 
 Rules:
 
@@ -91,7 +131,7 @@ Rules:
 - every coordinate query counts as 1 full iteration
 - re-querying a previously used coordinate still counts as a new iteration
 
-### 3.2 Iteration cap
+### 4.2 Iteration cap
 
 Active cap:
 
@@ -99,57 +139,112 @@ Active cap:
 iteration_cap = int(0.15 * H * W)
 ```
 
+Phase 0 example with 50×200 grid:
+
+```python
+iteration_cap = int(0.15 * 50 * 200) = 1500
+```
+
 A run that exceeds this cap is an automatic failure.
 
-This cap is active for phase 0 and phase 1 unless superseded later by a stricter
-benchmark rule.
+The algorithm always runs to the cap. Early stopping is not performed by the
+algorithm; the evaluator observes the full accuracy curve.
 
 ---
 
-## 4. Phase Scope
+## 5. Phase 0 Benchmark
 
-### 4.1 Phase 0
+### 5.1 Grid
+
+Fixed grid shape for Phase 0:
+
+```python
+H, W = 50, 200
+```
+
+### 5.2 Seed suite
+
+Phase 0 uses 10 pre-published fixed seeds.
+
+Seeds are fixed and public so that results are reproducible across
+implementations and machines.
+
+```python
+PHASE0_SEEDS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # placeholder — freeze before first official run
+```
+
+Each seed produces one independent draw of 8 blob layers, for a total of:
+
+```python
+80 blobs = 10 seeds × 8 layers
+```
+
+The seed suite will change in subsequent phases. Phase 0 results should be
+reported with their seed set explicitly recorded.
+
+### 5.3 Blob generation contract
+
+The generator must produce blobs satisfying the structural constraints in the
+problem definition:
+
+- each blob is 8-connected
+- coverage drawn from: median 40%, std 5%, truncated to [30%, 70%]
+- 0–3 interior holes per blob; hole bounding box drawn from mean 7×7, std 2×2 pixels
+- external outliers may or may not be present; their density is variable
+- 8 layers are drawn independently (different coverage, position, shape per layer)
+
+The generator must emit:
+
+```python
+truth_blob_mask.shape    == (8, H, W)   # meaningful blob only
+truth_outlier_mask.shape == (8, H, W)   # external outliers only
+truth_full_mask.shape    == (8, H, W)   # blob | outlier (what oracle returns)
+```
+
+### 5.4 Phase scope
 
 Phase 0 is the scaffold-building lane.
 
-Assumptions:
-
-- each blob layer contains exactly one meaningful blob
-- the evaluation dataset follows the one-blob-per-layer contract
-
-Goal:
+Goals:
 
 - stabilize the shared-coordinate algorithm skeleton
 - validate iteration discipline
-- validate high-accuracy reconstruction on the one-blob case
-
-### 4.2 Phase 1
-
-Phase 1 is the target lane.
-
-Target direction:
-
-- exact blob height and width recovery
-- continued `>= 98%` accuracy on every layer
-- stronger performance on supplemental metrics
-
-The one-blob-per-layer assumption remains active.
+- validate high-accuracy reconstruction on the one-blob-per-layer case
+- validate the evaluator callback architecture
 
 ---
 
-## 5. Core Scoring Contract
+## 6. Phase 1 Benchmark
 
-### 5.1 Hard scoring region
+### 6.1 Grid
+
+Phase 1 target direction uses a variable grid. Exact sizes to be determined.
+
+### 6.2 Seed suite
+
+Phase 1 uses a different seed suite from Phase 0. The Phase 0 seeds are retired
+when Phase 1 begins.
+
+### 6.3 Phase scope
+
+Phase 1 is the target lane. Requirements are stricter:
+
+- exact blob height and width recovery (no pixel tolerance)
+- continued `>= 98%` accuracy on every layer
+- stronger performance on supplemental metrics
+
+---
+
+## 7. Core Scoring Contract
+
+### 7.1 Hard scoring region
 
 Core pass/fail scoring is defined on `truth_blob_mask` only.
 
-This means:
-
-- the meaningful blob is the required reconstruction target
 - external positive outliers are not required for passing
 - recovering outliers is still beneficial through supplemental metrics
 
-### 5.2 Per-layer blob accuracy
+### 7.2 Per-layer blob accuracy
 
 For each layer `k`:
 
@@ -157,19 +252,20 @@ For each layer `k`:
 blob_accuracy_k = mean(predicted_blob_mask[k] == truth_blob_mask[k])
 ```
 
-This is the primary correctness metric.
+Accuracy is computed over the entire `H × W` grid.
 
-### 5.3 Hole treatment
+If the algorithm predicts outlier pixels as part of the blob, they count as
+false positives against `truth_blob_mask` and reduce accuracy naturally.
+
+### 7.3 Hole treatment
 
 Interior holes inside the blob are part of the blob reconstruction problem.
 
-Therefore:
-
-- holes remain part of `truth_blob_mask`
+- holes remain part of `truth_blob_mask` (holes are zeros inside the blob region)
 - incorrectly filling a hole hurts blob accuracy
 - missing a positive blob region also hurts blob accuracy
 
-### 5.4 Overall correctness rule
+### 7.4 Overall correctness rule
 
 A run passes only if every layer passes every active requirement.
 
@@ -177,7 +273,7 @@ No average-only pass rule is allowed.
 
 ---
 
-## 6. Bounding-Box Recovery
+## 8. Bounding-Box Recovery
 
 For each layer `k`, define:
 
@@ -189,26 +285,16 @@ The evaluator extracts:
 - `height_truth_k`, `width_truth_k`
 - `height_pred_k`, `width_pred_k`
 
-### 6.1 Phase 0 scaffold rule
+### 8.1 Phase 0 scaffold rule
 
-Phase 0 exists to let the algorithm skeleton stabilize before exact matching is
-required.
-
-In phase 0, both dimension errors must satisfy the pixelized tolerance rule:
+Both dimension errors must satisfy the pixelized tolerance rule:
 
 ```python
 abs(height_pred_k - height_truth_k) <= max(1, floor(0.05 * height_truth_k))
 abs(width_pred_k  - width_truth_k)  <= max(1, floor(0.05 * width_truth_k))
 ```
 
-Interpretation:
-
-- the allowed error is 5% of the true size, rounded into pixel space
-- every blob gets at least a 1-pixel scaffold tolerance in phase 0
-
-### 6.2 Phase 1 target rule
-
-Phase 1 is the intended end-state requirement.
+### 8.2 Phase 1 target rule
 
 For each layer `k`:
 
@@ -217,39 +303,35 @@ height_pred_k == height_truth_k
 width_pred_k  == width_truth_k
 ```
 
-That is, exact match.
+Exact match required.
 
 ---
 
-## 7. Connectivity Recommendation
+## 9. Connectivity Recommendation
 
-Connectivity is not part of the hard phase-0 scoring contract because truth and
-prediction are supplied explicitly as blob masks.
+Connectivity is not part of the hard phase-0 scoring contract.
 
 Recommended convention:
 
-- use `8-neighbor` connectivity for diagnostics, visualization, and any
+- use 8-neighbor connectivity for diagnostics, visualization, and any
   component-level analysis
 
 Recommended dataset property:
 
-- each `truth_blob_mask[k]` should form one `8-connected` blob in phase 0
-
-These are recommendations, not hard gates.
+- each `truth_blob_mask[k]` should form one 8-connected blob in phase 0
 
 ---
 
-## 8. Outlier Scoring
+## 10. Outlier Scoring
 
 Outliers are supplemental, not core pass/fail targets.
 
-### 8.1 Hard-rule treatment
+### 10.1 Hard-rule treatment
 
 - `truth_outlier_mask` is excluded from the hard blob accuracy metric
-- `predicted_outlier_mask` does not affect the hard blob accuracy metric
 - failure to recover outliers must not by itself cause failure
 
-### 8.2 Supplemental outlier metrics
+### 10.2 Supplemental outlier metrics
 
 If outlier masks are available, the evaluator should report:
 
@@ -257,16 +339,11 @@ If outlier masks are available, the evaluator should report:
 - outlier precision
 - outlier count error
 
-This preserves the intended tradeoff:
-
-- outlier recovery is good
-- outlier recovery is not worth sacrificing the core blob objective
-
 ---
 
-## 9. Acceptance Phases
+## 11. Acceptance Summary
 
-### 9.1 Phase 0: skeleton-building lane
+### 11.1 Phase 0
 
 A phase-0 run passes if all of the following hold:
 
@@ -276,10 +353,7 @@ A phase-0 run passes if all of the following hold:
 - for every layer, blob width satisfies the phase-0 pixelized tolerance rule
 - timing and memory are reported
 
-Phase 0 is intended to validate the reconstruction loop, query planner, and
-shared-coordinate architecture.
-
-### 9.2 Phase 1: target lane
+### 11.2 Phase 1
 
 A phase-1 run passes if all of the following hold:
 
@@ -289,15 +363,11 @@ A phase-1 run passes if all of the following hold:
 - for every layer, blob width matches exactly
 - timing and memory are reported
 
-Exact time and memory thresholds remain recommendations until the benchmark
-platform is frozen.
-
 ---
 
-## 10. Supplemental Metrics
+## 12. Supplemental Metrics
 
-The following metrics are recommended as secondary diagnostics and should be
-reported when practical:
+The following metrics are recommended as secondary diagnostics:
 
 - blob IoU
 - positive recall
@@ -305,51 +375,28 @@ reported when practical:
 - false-positive area outside the blob mask
 - boundary error statistics
 - outlier recall and outlier precision, if outlier channels are used
-
-Rationale:
-
-- earlier work showed that plain pixel accuracy can hide shape defects
-- blob IoU provides a stronger shape-overlap signal
-- positive recall helps expose missed blob mass even when overall accuracy looks
-  strong on sparse maps
-
-These metrics are recommended, not yet hard pass/fail gates.
+- per-iteration accuracy curve (primary diagnostic for algorithm efficiency)
 
 ---
 
-## 11. Dataset Recommendations
+## 13. Dataset Recommendations
 
-The official dataset family is not frozen yet. For now, the following are
-recommendations rather than hard rules.
+Recommended reporting for every benchmark artifact:
 
-Recommended dataset properties:
-
-- shared grid across all 8 layers
-- exactly one blob per layer
-- controllable overlap across layers
-- occasional interior holes
-- very sparse external positive outliers
-- fixed seed suites for reproducibility
-- explicit storage of `truth_blob_mask`, `truth_outlier_mask`, and `truth_full_mask`
-
-Recommended reporting:
-
-- always record the dataset generator version
-- always record the seed set
-- always record the overlap regime
-- always record hole and outlier settings
+- dataset generator version
+- seed set identifier and all seed values
+- grid shape
+- overlap regime (whether blobs from different layers overlap)
+- hole and outlier settings used
 
 ---
 
-## 12. Time Budget
+## 14. Time Budget
 
-### 12.1 Measurement principle
+### 14.1 Measurement principle
 
-The time budget is not a Python-level budget.
-
-Official elapsed-time claims should measure the algorithm core in a native,
-low-level implementation lane, excluding Python orchestration overhead wherever
-possible.
+Official elapsed-time claims should measure the algorithm core, excluding
+Python orchestration overhead wherever possible.
 
 Measured region should include only:
 
@@ -358,33 +405,7 @@ Measured region should include only:
 - reconstruction logic
 - stopping logic
 
-Measured region should exclude:
-
-- plot generation
-- debug printing
-- file I/O unrelated to required inputs
-- report serialization
-- Python wrapper overhead, if a wrapper is used only as a harness
-
-### 12.2 Timing lane recommendation
-
-For official timing eligibility, the preferred implementation core is a language
-whose first public release predates C in 1972.
-
-Recommended timing-lane languages:
-
-- assembly
-- B
-- BCPL
-- Fortran
-- ALGOL
-- PL/I
-
-Languages such as Python, C, C++, Rust, Go, Java, and JavaScript may still be
-used for correctness experiments, prototyping, and harness work, but their
-elapsed times should be treated as non-official.
-
-### 12.3 Budget recommendation
+### 14.2 Budget recommendation
 
 Because benchmark hardware has not yet been frozen, elapsed-time thresholds are
 currently recommendations, not hard gates.
@@ -394,44 +415,22 @@ Draft working recommendations:
 - phase 0 recommended target: `elapsed_native <= 1.0 s`
 - phase 1 recommended target: `elapsed_native <= 250 ms`
 
-Until the reference machine is defined:
-
-- elapsed time must always be reported
-- elapsed time should inform comparisons
-- elapsed time should not yet decide pass/fail by itself
-
 ---
 
-## 13. Memory Budget
+## 15. Memory Budget
 
-### 13.1 Measurement principle
-
-Peak memory should be measured as process peak resident set size, or the closest
-available low-level equivalent on the reference platform.
-
-Preferred unit:
-
-- MiB
-
-### 13.2 Budget recommendation
-
-As with elapsed time, the memory thresholds are provisional recommendations
-until the reference machine and implementation lane are finalized.
+Peak memory should be measured as process peak resident set size.
 
 Draft working recommendations:
 
 - phase 0 recommended target: `peak_memory <= 64 MiB`
 - phase 1 recommended target: `peak_memory <= 16 MiB`
 
-Rules:
-
-- memory usage must be reported for every benchmarked run
-- memory should guide comparisons
-- memory should not yet decide pass/fail by itself
+Memory must be reported for every benchmarked run.
 
 ---
 
-## 14. Ranking Rule
+## 16. Ranking Rule
 
 Methods are ranked lexicographically:
 
@@ -441,22 +440,16 @@ Methods are ranked lexicographically:
 4. lower native elapsed time
 5. lower peak memory
 
-Interpretation:
-
-- correctness dominates everything else
-- iteration efficiency dominates performance micro-optimizations
-- supplemental shape metrics help distinguish equally passing methods
-- time and memory break ties after correctness and iteration quality
-
 ---
 
-## 15. Required Evaluation Report
+## 17. Required Evaluation Report
 
 Each run should emit a machine-readable report containing at least:
 
 ```python
 {
     "phase": "phase0" | "phase1",
+    "seed": int,
     "grid_shape": [H, W],
     "iteration_cap": int,
     "iterations_used": int,
@@ -469,10 +462,9 @@ Each run should emit a machine-readable report containing at least:
     "per_layer_width_pass": [bool, ... length 8],
     "accuracy_pass": [bool, ... length 8],
     "overall_pass": bool,
+    "accuracy_curve": [[float x num_iterations] x 8],  # per-layer, per-iteration
     "elapsed_native_seconds": float,
     "peak_memory_mib": float,
-    "timing_lane_language": str,
-    "timing_lane_official": bool,
     "blob_iou": [float, ... length 8],
     "positive_recall": [float, ... length 8],
     "positive_precision": [float, ... length 8],
@@ -481,19 +473,15 @@ Each run should emit a machine-readable report containing at least:
 }
 ```
 
-Additional debug fields may be added freely.
-
 ---
 
-## 16. Open Items
+## 18. Open Items
 
 The following remain intentionally open:
 
-1. the official dataset generator and seed suite
-2. benchmark reference hardware
-3. final hard time budget
-4. final hard memory budget
-5. whether phase-1 hard metrics should eventually incorporate one or more supplemental metrics
-
-Until these are frozen, the evaluator should treat scores as draft but still
-apply the structural rules above.
+1. Final seed values for `PHASE0_SEEDS` (freeze before first official run)
+2. Benchmark reference hardware
+3. Final hard time budget
+4. Final hard memory budget
+5. Variable grid size handling for Phase 1
+6. Whether phase-1 hard metrics should eventually incorporate supplemental metrics

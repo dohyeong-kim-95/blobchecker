@@ -22,6 +22,16 @@ all 8 blob layers to the required accuracy.
 - A stacked deterministic oracle over 8 blob layers
 - Optional external iteration cap supplied by the evaluator
 
+### Algorithm prior
+
+The algorithm knows **only the grid shape `(H, W)`** before querying begins.
+It has no prior knowledge of:
+
+- blob location or size
+- blob coverage
+- number or size of interior holes
+- presence or density of outliers
+
 ### Oracle contract
 
 The conceptual oracle is:
@@ -42,6 +52,8 @@ Where:
 - each value is in `{0, 1}`
 - the oracle is deterministic
 - all 8 labels are observed together for the same coordinate
+- the oracle returns `truth_full_mask[k, row, col]` which includes both blob and
+  outlier pixels — the algorithm cannot directly distinguish the two
 
 ### Recommended truth artifact
 
@@ -63,7 +75,7 @@ Interpretation:
 
 - `truth_blob_mask` is the meaningful blob target for core scoring
 - `truth_outlier_mask` contains optional external positive outliers
-- `truth_full_mask` is the full observed binary layer
+- `truth_full_mask` is the full observed binary layer (what the oracle returns)
 
 ### Required prediction output
 
@@ -102,6 +114,31 @@ A coordinate selection is the atomic unit of cost.
 
 ---
 
+## Query Strategy
+
+The algorithm may use any query strategy:
+
+- **Adaptive (online):** next coordinate is chosen based on prior observations.
+  Advantage: can reduce iterations needed to reach required accuracy.
+- **Pre-planned (offline):** all query coordinates are fixed before querying
+  begins. Advantage: lower computational overhead per iteration.
+
+Both strategies are valid. Trade-offs are reflected in the evaluation ranking
+(iteration count and elapsed time are both tracked).
+
+---
+
+## Algorithm Termination
+
+The algorithm always runs until the iteration cap is exhausted. It does not
+self-terminate early.
+
+The evaluator (not the algorithm) is responsible for checking accuracy
+thresholds. The evaluator has access to ground truth and tracks reconstruction
+quality at every iteration via a callback.
+
+---
+
 ## Objective
 
 Minimize total iteration count subject to all of the following:
@@ -116,25 +153,49 @@ Passing quality comes first. Among passing methods, fewer iterations is better.
 
 ## Blob Model
 
-For this project, every layer contains exactly one meaningful blob.
+### Structural definition
 
-Assumed properties of the task:
+A valid blob for this task is defined structurally, not by a fixed generative
+distribution. This ensures benchmarks test general blob-finding capability
+rather than adaptation to a specific parametric family.
 
-- each layer has one blob of interest
-- blobs may overlap spatially with blobs from other layers
-- blob boundaries are expected to be reasonably coherent, not pure noise
+Required structural properties:
+
+- exactly one meaningful blob per layer
+- the blob is 8-connected
+- blob boundary is locally coherent (not random pixel-level noise)
 - small interior holes may exist inside the blob
 - isolated positive outliers may exist outside the blob
 
-Important evaluation rule:
+### Coverage
 
-- external isolated positive outliers are not the main target
-- recovering them is beneficial, but not required for a passing result
+Each blob's coverage (fraction of the grid that is positive in
+`truth_blob_mask[k]`) is drawn from a distribution with:
 
-### Phase 0 restriction
+- median: 40%
+- standard deviation: 5%
+- truncated range: [30%, 70%]
 
-Phase 0 uses the same one-blob-per-layer assumption as the long-term task.
-There is no multi-blob handling requirement.
+Coverage is drawn independently for each of the 8 layers.
+
+### Interior holes
+
+Each blob may contain 0 to 3 interior holes.
+
+Hole properties:
+
+- bounding box size: mean 7×7 pixels, standard deviation 2×2 pixels
+- holes are part of the blob reconstruction problem
+- incorrectly filling a hole hurts blob accuracy
+
+### External outliers
+
+External positive outliers (pixels outside the meaningful blob that are
+nevertheless positive in `truth_full_mask`) are optional:
+
+- a blob may have zero outliers
+- a blob may have sparse external outliers
+- outlier presence and density are not guaranteed
 
 ---
 
@@ -148,38 +209,30 @@ checks.
 For each layer `k`:
 
 ```python
+blob_accuracy_k = mean(predicted_blob_mask[k] == truth_blob_mask[k])
 blob_accuracy_k >= 0.98
 ```
 
-The intended interpretation is that the estimator must recover the meaningful
-blob shape with high fidelity for every layer, not just on average across
-layers.
+Accuracy is computed over the entire `H × W` grid, not just the blob region.
+
+Note: if the algorithm includes outlier pixels in `predicted_blob_mask`, those
+pixels count as false positives against `truth_blob_mask` and hurt accuracy.
+This naturally penalizes over-prediction without a separate scoring rule.
 
 ### 2. Blob size recovery
 
-For each layer `k`, the estimator must recover the blob's:
-
-- height
-- width
-
-Working interpretation for this repository:
+For each layer `k`, the estimator must recover the blob's height and width.
 
 - compute the true blob bounding box from `truth_blob_mask[k]`
 - compute the predicted blob bounding box from `predicted_blob_mask[k]`
-- phase 0 may use a bounded tolerance during scaffold development
-- the long-term target remains exact height and width recovery
+- phase 0 uses a 5% pixelized tolerance
+- phase 1 requires exact match
 
 ### 3. Outlier tolerance
 
-The evaluator should de-emphasize isolated positive pixels or tiny disconnected
-positive components outside the blob target.
-
-Practical meaning:
-
-- the system is optimized for reconstructing the meaningful blob structure
-- sparse external positive noise is not a required target
-- recovering such outliers is still better than missing them if it can be done
-  cheaply
+The evaluator scores blob accuracy on `truth_blob_mask` only. External outliers
+are not required reconstruction targets. Outlier recall and precision are
+reported as supplemental metrics only.
 
 ### 4. Iteration efficiency
 
@@ -207,16 +260,32 @@ Therefore:
 
 ---
 
+## Evaluation Architecture
+
+The evaluator is a **separate component** from the algorithm. It:
+
+- holds ground truth (`truth_blob_mask`, `truth_outlier_mask`, `truth_full_mask`)
+- wraps the oracle so the algorithm cannot access truth directly
+- receives a copy of `predicted_blob_mask` at each iteration (callback contract)
+- records per-iteration accuracy for all 8 layers
+- produces an accuracy curve as a function of iteration count
+- applies acceptance criteria to the final state
+
+The algorithm has no access to ground truth at any point during execution.
+
+---
+
 ## Evaluation View
 
-The evaluator should report at least:
+The evaluator reports at least:
 
 - total iterations used
-- per-layer blob accuracy for all 8 blobs
+- per-layer blob accuracy for all 8 blobs at final state
 - per-layer pass/fail for the 98% threshold
 - per-layer pass/fail for blob-height recovery
 - per-layer pass/fail for blob-width recovery
 - overall pass/fail
+- per-iteration accuracy curve for all 8 layers
 
 Recommended aggregate rule:
 
@@ -243,22 +312,18 @@ Implications:
 - model complexity is justified only if it clearly reduces shared-coordinate
   query count
 
+Since the algorithm must also distinguish blob pixels from outlier pixels using
+only the binary oracle signal, geometric reasoning (e.g. connectivity, spatial
+coherence) is a natural tool for blob-outlier separation.
+
 ---
 
-## Recommendations
+## Application Context
 
-These are recommendations, not hard requirements.
-
-- The dataset generator should emit `truth_blob_mask`, `truth_outlier_mask`, and
-  `truth_full_mask` separately.
-- The predictor should emit `predicted_blob_mask` as the core output and
-  `predicted_outlier_mask` as an optional output.
-- Supplemental metrics such as blob IoU and positive recall should be reported
-  alongside core pass/fail metrics.
-- Grid size, overlap regime, hole rate, and outlier rate should be recorded in
-  every benchmark artifact.
-- Native low-level timing should be preferred over Python-level timing for
-  performance comparisons.
+This project is intended as a real applied system, not a pure research
+benchmark. Implementation complexity and maintainability are first-class
+concerns. Algorithmic simplicity and interpretability are valued alongside
+raw performance.
 
 ---
 
@@ -269,18 +334,7 @@ The task does not require:
 - recovery of every isolated positive outlier outside the meaningful blob region
 - per-blob independent coordinate schedules
 - optimizing average accuracy while letting one or more blobs fail
-
----
-
-## Open Questions
-
-These are still unresolved and should be made explicit in code and evaluation:
-
-1. How should interior holes be weighted relative to overall blob accuracy?
-2. Is the grid size fixed for the benchmark or variable across tasks?
-3. What dataset family should become the official benchmark distribution?
-4. What reference machine and official low-level timing lane should be used?
-5. What final hard time and memory budgets should replace the current recommendations?
+- early stopping logic within the algorithm
 
 ---
 
@@ -298,3 +352,6 @@ working assumptions:
 - success also requires correct blob height and width on every layer
 - external positive outliers are optional to recover
 - iteration count is the primary efficiency metric
+- algorithm always runs to the iteration cap
+- evaluator is separate from algorithm and holds ground truth
+- algorithm knows only grid shape before querying begins
