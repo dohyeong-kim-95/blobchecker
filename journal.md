@@ -216,6 +216,67 @@ Lessons:
   iteration should compare boundary budget allocations instead of assuming more
   boundary scans are always better.
 
+## 2026-04-26 — Stateful Boundary Binary Search
+
+Hypothesis:
+
+The fixed four-side boundary scan spends queries on coarse outside lines. A
+stateful bracketed binary search should refine bbox edges more efficiently by
+querying only midpoints between an observed outside zero and an observed inside
+positive.
+
+Changes:
+
+- Phase 2 now builds per-layer boundary tasks from coarse observations.
+- A task is created only when there is an inside positive and an outward
+  observed zero on the same row or column.
+- Each task adaptively updates its bracket after the query result arrives.
+- Tasks are round-robin by layer so a single layer does not consume the boundary
+  budget.
+- Boundary trimming still uses the conservative confirmed-zero/no-positive rule
+  for rows and columns.
+
+Results:
+
+```text
+public seeds [0..9]:
+  pass: 0/10
+  mean_min_accuracy: 0.9696
+  mean_time: 1.8s/seed
+
+validation seeds [100..109]:
+  pass: 0/10
+  mean_min_accuracy: 0.9678
+  mean_time: 1.8s/seed
+```
+
+Interpretation:
+
+- This slightly improved mean min accuracy versus the fixed four-side scan
+  result (`0.9693` public, `0.9677` validation subset), but the margin is small.
+- Runtime increased from about 1.5-1.6s to about 1.8s because Phase 2 now
+  performs stateful task management and more adaptive boundary work.
+- The result is not a pass and should not be considered a solved boundary
+  method yet.
+
+Verification:
+
+- Python syntax compilation passed for the changed modules.
+- Boundary task, bracket update, and trim helper behavior were checked with a
+  local scipy stub.
+- A local `.venv` with `requirements.txt` was used for benchmark execution.
+
+Lessons:
+
+- Binary search is viable and not obviously overfit: public and validation
+  subset moved in the same direction.
+- The improvement is small enough that boundary task allocation matters more
+  than the high-level idea. The next experiment should tune by principle, not
+  public seeds: fewer anchors, fewer steps, or worst-layer-focused boundary
+  tasks.
+- Height failures remain. Pure left/right width work is not enough for the 98%
+  accuracy target.
+
 ## Durable Lessons
 
 1. Query strategy and reconstruction are coupled. Do not swap reconstruction
