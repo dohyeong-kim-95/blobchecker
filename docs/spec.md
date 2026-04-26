@@ -113,6 +113,28 @@ H, W = 50, 200
 iteration_cap = 1500
 ```
 
+### Development Budget Ladder
+
+The official submission cap remains `int(0.15 * H * W)`. During development,
+candidate algorithms should also be evaluated at wider query budgets so that
+algorithm structure and budget compression are not conflated.
+
+| Development phase | Budget ratio | Phase 0 iterations | Purpose |
+|---|---:|---:|---|
+| Phase A | 50% | 5,000 | Find a structure that can pass before optimizing query count. |
+| Phase B | 30% | 3,000 | Remove redundant queries and rebalance phase allocations. |
+| Phase C | 20% | 2,000 | Compress weakest-layer, boundary, and hole priorities. |
+| Phase D | 15% | 1,500 | Match the official submission condition. |
+
+Rules:
+
+- Phase A-C are diagnostic development gates, not relaxed submission gates.
+- A method that only passes Phase A is not considered solved.
+- When a change improves a lower budget phase, compare it against the same
+  method at higher phases to verify that the improvement is structural rather
+  than seed-specific noise.
+- Report public and validation seed suites separately at every budget ratio.
+
 ## Compute Cost Metric
 
 Iteration count is the primary task cost, but it does not capture algorithm

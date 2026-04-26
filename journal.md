@@ -285,6 +285,38 @@ Disposition:
   but in the current implementation it would add noise when evaluating the next
   algorithmic change.
 
+## 2026-04-26 — Strategy Pivot to Budget Ladder
+
+Problem:
+
+- The 15% budget is tight enough that local improvements are hard to interpret.
+- Recent boundary experiments changed mean min accuracy by only about 0.0001 to
+  0.0003, which is too small to distinguish robust structure from allocation
+  noise.
+- No current method passes, so optimizing directly under the submission cap
+  risks compressing an algorithm that is not structurally capable of passing.
+
+Decision:
+
+- Reframe development as a budget ladder:
+
+```text
+Phase A: 50% budget  -> find a pass-capable algorithm structure
+Phase B: 30% budget  -> remove redundant queries and rebalance allocations
+Phase C: 20% budget  -> compress weakest-layer/boundary/hole priorities
+Phase D: 15% budget  -> match the official submission condition
+```
+
+Lessons:
+
+- First prove that a structure can pass when query budget is not the binding
+  constraint.
+- Only after that should query removal, boundary allocation, and runtime/BOPs
+  be treated as optimization targets.
+- Budget ratio must become an explicit benchmark dimension. Otherwise every
+  algorithm change mixes three questions: whether the idea works, whether it
+  fits the cap, and whether it overfits the current public seeds.
+
 ## Durable Lessons
 
 1. Query strategy and reconstruction are coupled. Do not swap reconstruction
@@ -298,3 +330,6 @@ Disposition:
    once coarse localization is complete.
 6. Every-layer pass/fail means the weakest layer should influence acquisition,
    not just the summed average score.
+7. Do not optimize only at 15% until a pass-capable structure exists at a wider
+   budget. Use the budget ladder to separate algorithm viability from query
+   compression.

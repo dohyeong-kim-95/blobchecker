@@ -44,7 +44,12 @@ Pre-planned 전략을 쓸 경우, greedy coverage maximization이 최적해의 (
 
 ## 권고 알고리즘 구조
 
-### Adaptive 전략 (권고)
+### Adaptive 전략 (리서치 기반 초안)
+
+아래 구조는 리서치에서 도출한 출발점입니다. 현재 구현 실험에서는 15%
+budget에서 boundary binary search의 이득이 작고 runtime/복잡도 비용이
+있었으므로, binary search는 즉시 고정할 권고가 아니라 Phase A의 넓은
+budget에서 다시 검증할 후보로 취급합니다.
 
 ```
 Phase 1 — Discovery (200 iterations, 13%)
@@ -53,7 +58,7 @@ Phase 1 — Discovery (200 iterations, 13%)
   
 Phase 2 — Boundary Localization (900 iterations, 60%)
   목적: 각 행의 왼쪽/오른쪽 경계를 픽셀 수준으로 정밀 탐색
-  방법: 합산 entropy 최대화 + binary search per row
+  방법: 합산 entropy 최대화 + boundary refinement
   acquisition: score(r,c) = Σ_k H(p̂_k(r,c)), unobserved cell 중 argmax
   
 Phase 3 — Interior Hole Detection (300 iterations, 20%)
@@ -185,7 +190,8 @@ CS 이론 하한: `M ≥ C · |boundary| · log(N)`
 ## 미결 질문 (리서치로 해소되지 않은 것)
 
 1. **공간 전파 decay 파라미터**: blob 경계 smoothness에 따라 튜닝 필요
-2. **Phase 분할 비율**: 20%/60%/15%/5% 비율이 실제 seed에서 최적인지 실험 필요
+2. **Budget ladder별 Phase 분할 비율**: 50%/30%/20%/15% 예산에서 discovery,
+   boundary, hole, repair 비율이 어떻게 달라져야 하는지 실험 필요
 3. **Worst-layer scalarization의 α값**: 순수 합산 vs 순수 worst-layer 비율
 4. **내부 구멍 탐지 격자 간격**: 7×7 구멍을 3픽셀 간격으로 탐지 가능한지 검증
 5. **8-연결성 기반 outlier 분리 임계값**: 어느 크기까지 outlier로 분류할지
