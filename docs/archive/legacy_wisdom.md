@@ -1,5 +1,8 @@
 # Legacy Wisdom
 
+> Archived reference. Use [README.md](../../README.md) for current decisions.
+> This file records lessons from the retired single-blob project.
+
 ## What the old project was
 
 This repository originally benchmarked several methods for reconstructing a
