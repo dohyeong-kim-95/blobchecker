@@ -1,108 +1,109 @@
-# Blobchecker Decision Brief
+# Blobchecker 의사결정 브리프
 
-This is the single document to read before making project decisions.
+프로젝트 의사결정을 하기 전에 이 문서를 먼저 봅니다.
 
-## Current Goal
+## 현재 목표
 
-Reconstruct 8 binary blob layers on one shared 2D grid with as few coordinate
-queries as possible.
+하나의 2D 좌표 그리드 위에 있는 8개 이진 blob 레이어를 가능한 적은
+좌표 질의로 재구성합니다.
 
-One iteration selects exactly one coordinate `(row, col)`. The oracle returns
-the 8 binary labels at that same coordinate, one per layer. Algorithms know only
-the grid shape before querying.
+한 iteration은 정확히 하나의 좌표 `(row, col)`를 선택합니다. Oracle은 그
+좌표에서 8개 레이어의 이진 레이블을 동시에 반환합니다. 알고리즘은 질의
+전에 그리드 크기만 알고 시작합니다.
 
-## Canonical Contract
+## 정본 계약
 
-The detailed contract lives in [docs/spec.md](docs/spec.md). In short:
+상세한 문제/평가 계약은 [docs/spec.md](docs/spec.md)에 있습니다. 핵심만
+요약하면 다음과 같습니다.
 
-| Item | Current value |
+| 항목 | 현재 값 |
 |---|---|
-| Layers | 8 |
-| Phase 0 grid | 50 x 200 |
-| Iteration cap | `int(0.15 * H * W)` = 1,500 for Phase 0 |
-| Oracle output | `truth_full_mask[:, row, col]` |
-| Scoring target | `truth_blob_mask`, not outliers |
-| Required output | `predicted_blob_mask.shape == (8, H, W)` |
-| Accuracy gate | every layer `>= 98%` |
-| Shape gate, Phase 0 | height/width within `max(1, floor(5% * truth_dim))` |
-| Shape gate, Phase 1 | exact height/width |
-| Overall pass | every layer passes every active gate |
+| 레이어 수 | 8 |
+| Phase 0 그리드 | 50 x 200 |
+| Iteration cap | `int(0.15 * H * W)` = Phase 0 기준 1,500 |
+| Oracle 출력 | `truth_full_mask[:, row, col]` |
+| 채점 대상 | `truth_blob_mask`, outlier 제외 |
+| 필수 출력 | `predicted_blob_mask.shape == (8, H, W)` |
+| 정확도 기준 | 모든 레이어 `>= 98%` |
+| Shape 기준, Phase 0 | 높이/너비가 `max(1, floor(5% * truth_dim))` 이내 |
+| Shape 기준, Phase 1 | 높이/너비 정확히 일치 |
+| 전체 pass | 모든 레이어가 모든 활성 기준을 통과해야 함 |
 
-Outliers are observed through the oracle but are not core reconstruction
-targets. Predicting an outlier as blob is naturally penalized as a false
-positive against `truth_blob_mask`.
+Outlier는 oracle을 통해 관측되지만 핵심 복원 대상은 아닙니다. Outlier를
+blob으로 예측하면 `truth_blob_mask` 기준 false positive로 자연스럽게
+패널티를 받습니다.
 
-## Current Implementation
+## 현재 구현
 
-| Component | File |
+| 컴포넌트 | 파일 |
 |---|---|
-| Dataset generator | `src/generator.py` |
+| 데이터 생성기 | `src/generator.py` |
 | Oracle wrapper | `src/oracle.py` |
-| Evaluator and result object | `src/evaluator.py` |
-| Abstract algorithm API | `src/algorithms/base.py` |
+| Evaluator와 결과 객체 | `src/evaluator.py` |
+| 알고리즘 추상 API | `src/algorithms/base.py` |
 | Pre-planned baseline | `src/algorithms/preplanned_greedy.py` |
-| Current adaptive algorithm | `src/algorithms/geometry_first.py` |
-| Benchmark runner | `benchmark.py` |
+| 현재 adaptive 알고리즘 | `src/algorithms/geometry_first.py` |
+| 벤치마크 runner | `benchmark.py` |
 
-Run the current benchmark with:
+현재 벤치마크 실행:
 
 ```bash
 python benchmark.py --algo both
 ```
 
-## Latest Known Results
+## 최신 결과
 
-Phase 0, 10 public placeholder seeds `[0..9]`, grid 50 x 200:
+Phase 0, 공개 placeholder seed 10개 `[0..9]`, grid 50 x 200 기준:
 
-| Algorithm | Pass | Mean min accuracy | Mean time |
+| 알고리즘 | Pass | Mean min accuracy | Mean time |
 |---|---:|---:|---:|
 | `preplanned` | 0/10 | 0.9279 | 7.0s/seed |
-| `geometry_first` before boundary trim | 0/10 | 0.9648 | 1.4s/seed |
-| `geometry_first` current journal result | 0/10 | 0.9695 | 1.5s/seed |
+| `geometry_first` boundary trim 이전 | 0/10 | 0.9648 | 1.4s/seed |
+| `geometry_first` 현재 journal 결과 | 0/10 | 0.9695 | 1.5s/seed |
 
-The current blocker is accuracy, not the shared-coordinate API. Height recovery
-improved after confirmed-zero boundary trimming, but the algorithm remains below
-the 98% per-layer accuracy gate.
+현재 병목은 shared-coordinate API가 아니라 정확도입니다. Confirmed-zero
+boundary trimming 이후 높이 복원은 개선됐지만, 아직 모든 레이어 98%
+정확도 기준에는 도달하지 못했습니다.
 
-## Decision Rules
+## 의사결정 원칙
 
-Use these rules when choosing the next change:
+다음 변경을 고를 때 이 원칙을 따릅니다.
 
-1. Preserve the shared-coordinate constraint. Do not introduce per-layer query
-   schedules unless they are wrapped by a global one-coordinate-per-iteration
-   planner.
-2. Keep the evaluator as the source of truth for pass/fail. Algorithms must not
-   access `truth_blob_mask` or `truth_outlier_mask`.
-3. Prefer geometry-first improvements before GP-style models. Prior work found
-   dense and sparse GP complexity hard to justify for this benchmark.
-4. Optimize for every-layer pass, not average accuracy. One failing layer fails
-   the whole run.
-5. Treat outlier recovery as supplemental. Blob accuracy against
-   `truth_blob_mask` is the core gate.
-6. Keep results tied to seed set, grid shape, algorithm parameters, and command.
+1. Shared-coordinate 제약을 보존합니다. 레이어별 좌표 스케줄은 전역
+   one-coordinate-per-iteration planner로 감싸지 않는 한 도입하지 않습니다.
+2. Pass/fail의 정본은 evaluator입니다. 알고리즘은 `truth_blob_mask`나
+   `truth_outlier_mask`에 접근하면 안 됩니다.
+3. GP류 모델보다 geometry-first 개선을 먼저 시도합니다. 과거 작업에서
+   dense/sparse GP는 복잡도 대비 이득을 정당화하기 어려웠습니다.
+4. 평균 정확도가 아니라 모든 레이어 통과를 최적화합니다. 레이어 하나가
+   실패하면 전체 run이 실패합니다.
+5. Outlier 복원은 supplemental로 취급합니다. 핵심 기준은
+   `truth_blob_mask` 대비 blob accuracy입니다.
+6. 결과는 seed set, grid shape, 알고리즘 파라미터, 실행 command와 함께
+   기록합니다.
 
-## Next Decisions
+## 다음 결정 후보
 
-The most useful next experiments are:
+가장 유용한 다음 실험은 다음 순서입니다.
 
-| Priority | Decision | Why |
+| 우선순위 | 결정 | 이유 |
 |---:|---|---|
-| 1 | Add left/right boundary targeting and trimming | Current errors are still mostly boundary pixels, especially width/edge uncertainty. |
-| 2 | Add targeted interior-hole probing | Up to 3 holes of about 7 x 7 pixels can alone consume most of the 2% error budget. |
-| 3 | Improve outlier isolation near the main component | Isolated outliers are handled by connected components; boundary-adjacent outliers can still merge. |
-| 4 | Compare sum-entropy vs worst-layer weighting | Averages are not enough; the weakest layer determines pass/fail. |
-| 5 | Freeze Phase 0 seeds and benchmark hardware | Timing and official result claims need stable context. |
+| 1 | 좌/우 boundary targeting과 trimming 추가 | 현재 오류는 여전히 boundary pixel, 특히 width/edge 불확실성에 집중되어 있습니다. |
+| 2 | 내부 hole targeted probing 추가 | 최대 3개의 약 7 x 7 hole만으로도 2% error budget 대부분을 소모할 수 있습니다. |
+| 3 | Main component 근처 outlier 격리 개선 | 고립 outlier는 connected component로 처리되지만 boundary-adjacent outlier는 blob에 합쳐질 수 있습니다. |
+| 4 | Sum-entropy와 worst-layer weighting 비교 | 평균만으로는 부족하고, 가장 약한 레이어가 pass/fail을 결정합니다. |
+| 5 | Phase 0 seed와 benchmark hardware freeze | Timing과 공식 결과 주장은 안정된 기준 환경이 필요합니다. |
 
-## Document Map
+## 문서 지도
 
-| Document | Role |
+| 문서 | 역할 |
 |---|---|
-| [README.md](README.md) | Decision brief. Read this first and use it for project choices. |
-| [docs/spec.md](docs/spec.md) | Canonical detailed problem and evaluation contract. |
-| [journal.md](journal.md) | Time-ordered experiments, failures, lessons, and discarded approaches. |
-| [research/08_synthesis_and_recommendations.md](research/08_synthesis_and_recommendations.md) | Research synthesis and method rationale. |
-| [docs/archive/legacy_wisdom.md](docs/archive/legacy_wisdom.md) | Archived legacy lessons from the old single-blob project. |
+| [README.md](README.md) | 의사결정 브리프. 프로젝트 판단은 여기서 시작합니다. |
+| [docs/spec.md](docs/spec.md) | 상세 문제 정의와 평가 계약의 정본입니다. |
+| [journal.md](journal.md) | 시간순 실험, 실패, 시행착오, 폐기한 접근을 기록합니다. |
+| [research/08_synthesis_and_recommendations.md](research/08_synthesis_and_recommendations.md) | 리서치 종합과 방법론 선택 근거입니다. |
+| [docs/archive/legacy_wisdom.md](docs/archive/legacy_wisdom.md) | 과거 단일-blob 프로젝트에서 얻은 레거시 교훈입니다. |
 
-Removed root-level duplicate docs should not be recreated. If a new decision
-needs more detail than this brief can hold, update `docs/spec.md` or
-`journal.md` and link it from here.
+삭제한 root-level 중복 문서는 다시 만들지 않습니다. 이 브리프보다 더
+자세한 내용이 필요한 결정은 `docs/spec.md` 또는 `journal.md`에 반영하고,
+여기에서 링크합니다.
