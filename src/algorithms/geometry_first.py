@@ -312,6 +312,7 @@ class GeometryFirstAdaptive(BaseAlgorithm):
         self._boundary_tasks: list[_BoundaryTask] = []
         self._boundary_queries_used = 0
         self._pending_boundary_task: _BoundaryTask | None = None
+        self._last_query_phase = "coarse"
 
         # Entropy score cache (invalidated by every update)
         self._score: np.ndarray | None = None
@@ -328,6 +329,7 @@ class GeometryFirstAdaptive(BaseAlgorithm):
         if self._phase == 1:
             if self._disc_idx < len(self._discovery):
                 row, col = self._discovery[self._disc_idx]
+                self._last_query_phase = "coarse"
                 self._disc_idx += 1
                 if self._disc_idx >= len(self._discovery):
                     self._start_boundary_phase()
@@ -338,6 +340,7 @@ class GeometryFirstAdaptive(BaseAlgorithm):
         if self._phase == 2:
             query = self._next_boundary_query()
             if query is not None:
+                self._last_query_phase = "boundary"
                 return query
             self._phase = 3
 
@@ -348,7 +351,12 @@ class GeometryFirstAdaptive(BaseAlgorithm):
             self._score_dirty = False
 
         best = int(self._score.argmax())
+        self._last_query_phase = "entropy"
         return divmod(best, self.W)
+
+    def diagnostic_phase(self) -> str:
+        """Return the phase that produced the most recent query."""
+        return self._last_query_phase
 
     def _start_boundary_phase(self) -> None:
         self._boundary_tasks = _build_boundary_tasks(
