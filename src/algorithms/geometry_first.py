@@ -7,11 +7,10 @@ Phase 1 — Coarse discovery (~250 iterations)
   Queries a stride-(5,8) grid.  With PROP_RADIUS=4 every interior pixel is
   within propagation range of at least one Phase 1 observation.
 
-Phase 2 — Boundary refinement (~256-320 iterations)
-  Builds per-layer boundary brackets from coarse positive observations and
-  outward observed zeros, then adaptively binary-searches top/bottom/left/right
-  edges.  Observations here are used by the trim step in predict() to remove
-  overshoot rows or columns (confirmed label=0, no label=1) from the prediction.
+Phase 2 — Boundary refinement (~320 iterations)
+  Scans just outside the detected top/bottom/left/right edges for each layer.
+  Observations here are used by the trim step in predict() to remove overshoot
+  rows or columns (confirmed label=0, no label=1) from the prediction.
 
 Phase 3 — Adaptive entropy acquisition (remaining ~1050 iterations)
   Picks the unqueried pixel with the highest sum-of-entropies:
@@ -28,8 +27,6 @@ directly corrects the systematic h_pred > h_truth overestimation caused by
 belief-propagation overshoot.
 """
 
-from dataclasses import dataclass
-
 import numpy as np
 from scipy.ndimage import label as ndlabel
 
@@ -44,10 +41,10 @@ PROP_RADIUS = 4      # was 3; wider coverage per query
 PROP_DECAY  = 0.60   # was 0.65; reduced to limit overshoot at larger radius
 
 # ── Boundary refinement (Phase 2) ───────────────────────────────────────────
-# Binary-searches coarse brackets outside detected blob edges.
-BOUNDARY_ANCHORS_PER_SIDE = 2
-BOUNDARY_BINARY_STEPS = 4
-BOUNDARY_CAP = 320
+# Scans the coarse-step gap outside detected blob edges.
+BOUNDARY_ROW_SCAN_STEP = 20  # 10 queries per scanned row on 50×200 Phase 0 grid
+BOUNDARY_COL_SCAN_STEP = 5   # 10 queries per scanned column on 50×200 Phase 0 grid
+BOUNDARY_CAP = 320           # one outside band for 4 sides × 8 layers, less duplicates
 
 # ── Reconstruction ───────────────────────────────────────────────────────────
 BELIEF_THRESHOLD = 0.5
@@ -146,137 +143,86 @@ def _trim_confirmed_boundary(
     return result
 
 
-@dataclass
-class _BoundaryTask:
-    """One layer-specific bracketed search along a row or column."""
-
-    layer: int
-    axis: int       # 0: row varies at fixed column, 1: column varies at fixed row
-    fixed: int
-    outside: int
-    inside: int
-    remaining: int = BOUNDARY_BINARY_STEPS
-
-    def converged(self) -> bool:
-        return abs(self.outside - self.inside) <= 1 or self.remaining <= 0
-
-    def point(self) -> tuple[int, int]:
-        mid = (self.outside + self.inside) // 2
-        if self.axis == 0:
-            return mid, self.fixed
-        return self.fixed, mid
-
-    def apply(self, label: int) -> None:
-        mid = (self.outside + self.inside) // 2
-        if label:
-            self.inside = mid
-        else:
-            self.outside = mid
-        self.remaining -= 1
-
-
-def _select_evenly(values: np.ndarray, limit: int) -> list[int]:
-    """Select up to `limit` representative values without seed-specific tuning."""
-    if values.size <= limit:
-        return [int(v) for v in values]
-    idxs = np.linspace(0, values.size - 1, num=limit, dtype=int)
-    return [int(values[i]) for i in idxs]
-
-
-def _nearest_outside_zero(
-    obs_mask: np.ndarray,
-    obs_labels_k: np.ndarray,
-    axis: int,
-    fixed: int,
-    inside: int,
-    direction: int,
-    limit: int,
-) -> int | None:
-    """Find the nearest observed zero moving outward from an inside positive."""
-    pos = inside + direction
-    while 0 <= pos < limit:
-        if axis == 0:
-            observed = obs_mask[pos, fixed]
-            label = obs_labels_k[pos, fixed]
-        else:
-            observed = obs_mask[fixed, pos]
-            label = obs_labels_k[fixed, pos]
-        if observed and label == 0:
-            return pos
-        pos += direction
-    return None
-
-
-def _build_boundary_tasks(
+def _build_boundary_queries(
     obs_mask: np.ndarray,
     obs_labels: np.ndarray,
     H: int,
     W: int,
-) -> list[_BoundaryTask]:
+) -> list[tuple[int, int]]:
     """
-    After Phase 1, create bracketed binary-search tasks for detected blob edges.
+    After Phase 1, scan the coarse-step gap outside each layer's detected blob
+    edges.  These observations give the trim step confirmed label=0 lines to
+    eliminate from the final prediction.
 
-    A valid bracket has one inside positive observation and one outward observed
-    zero on the same row/column.  Tasks without such a bracket are skipped
-    rather than guessed from public-seed geometry.
+    Round-robin across sides and layers (innermost line first) so every layer
+    gets boundary coverage before the BOUNDARY_CAP is consumed by early layers.
+    Returned list is deduplicated and capped at BOUNDARY_CAP.
     """
-    tasks_by_layer: list[list[_BoundaryTask]] = [[] for _ in range(8)]
+    # Collect boundary line ranges per layer (innermost first)
+    layer_top_rows: list[list[int]] = []
+    layer_bot_rows: list[list[int]] = []
+    layer_left_cols: list[list[int]] = []
+    layer_right_cols: list[list[int]] = []
 
     for k in range(8):
         has_pos = obs_mask & (obs_labels[k] == 1)
         pos_rows = np.where(has_pos.any(axis=1))[0]
         pos_cols = np.where(has_pos.any(axis=0))[0]
         if pos_rows.size == 0 or pos_cols.size == 0:
+            layer_top_rows.append([])
+            layer_bot_rows.append([])
+            layer_left_cols.append([])
+            layer_right_cols.append([])
             continue
-
         top_r = int(pos_rows[0])
         bot_r = int(pos_rows[-1])
         left_c = int(pos_cols[0])
         right_c = int(pos_cols[-1])
+        # Innermost first (top_r-1, top_r-2, ..., top_r-COARSE_STEP_R)
+        tops = list(reversed(range(max(0, top_r - COARSE_STEP_R), top_r)))
+        # Innermost first (bot_r+1, bot_r+2, ...)
+        bots = list(range(bot_r + 1, min(H, bot_r + COARSE_STEP_R + 1)))
+        # Innermost first (left_c-1, left_c-2, ..., left_c-COARSE_STEP_C)
+        lefts = list(reversed(range(max(0, left_c - COARSE_STEP_C), left_c)))
+        # Innermost first (right_c+1, right_c+2, ...)
+        rights = list(range(right_c + 1, min(W, right_c + COARSE_STEP_C + 1)))
+        layer_top_rows.append(tops)
+        layer_bot_rows.append(bots)
+        layer_left_cols.append(lefts)
+        layer_right_cols.append(rights)
 
-        # Top/bottom: row varies at representative positive columns.
-        top_cols = _select_evenly(np.where(has_pos[top_r])[0], BOUNDARY_ANCHORS_PER_SIDE)
-        bot_cols = _select_evenly(np.where(has_pos[bot_r])[0], BOUNDARY_ANCHORS_PER_SIDE)
-        for c in top_cols:
-            outside = _nearest_outside_zero(
-                obs_mask, obs_labels[k], axis=0, fixed=c,
-                inside=top_r, direction=-1, limit=H,
-            )
-            if outside is not None and abs(outside - top_r) > 1:
-                tasks_by_layer[k].append(_BoundaryTask(k, 0, c, outside, top_r))
-        for c in bot_cols:
-            outside = _nearest_outside_zero(
-                obs_mask, obs_labels[k], axis=0, fixed=c,
-                inside=bot_r, direction=1, limit=H,
-            )
-            if outside is not None and abs(outside - bot_r) > 1:
-                tasks_by_layer[k].append(_BoundaryTask(k, 0, c, outside, bot_r))
+    queries: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
 
-        # Left/right: column varies at representative positive rows.
-        left_rows = _select_evenly(np.where(has_pos[:, left_c])[0], BOUNDARY_ANCHORS_PER_SIDE)
-        right_rows = _select_evenly(np.where(has_pos[:, right_c])[0], BOUNDARY_ANCHORS_PER_SIDE)
-        for r in left_rows:
-            outside = _nearest_outside_zero(
-                obs_mask, obs_labels[k], axis=1, fixed=r,
-                inside=left_c, direction=-1, limit=W,
-            )
-            if outside is not None and abs(outside - left_c) > 1:
-                tasks_by_layer[k].append(_BoundaryTask(k, 1, r, outside, left_c))
-        for r in right_rows:
-            outside = _nearest_outside_zero(
-                obs_mask, obs_labels[k], axis=1, fixed=r,
-                inside=right_c, direction=1, limit=W,
-            )
-            if outside is not None and abs(outside - right_c) > 1:
-                tasks_by_layer[k].append(_BoundaryTask(k, 1, r, outside, right_c))
+    def add_row(r: int) -> None:
+        for c in range(0, W, BOUNDARY_ROW_SCAN_STEP):
+            key = (r, c)
+            if not obs_mask[r, c] and key not in seen:
+                queries.append(key)
+                seen.add(key)
 
-    tasks: list[_BoundaryTask] = []
-    max_len = max((len(layer_tasks) for layer_tasks in tasks_by_layer), default=0)
-    for i in range(max_len):
-        for layer_tasks in tasks_by_layer:
-            if i < len(layer_tasks):
-                tasks.append(layer_tasks[i])
-    return tasks
+    def add_col(c: int) -> None:
+        for r in range(0, H, BOUNDARY_COL_SCAN_STEP):
+            key = (r, c)
+            if not obs_mask[r, c] and key not in seen:
+                queries.append(key)
+                seen.add(key)
+
+    # Round-robin: one outside line per side per layer per pass.
+    for line_idx in range(max(COARSE_STEP_R, COARSE_STEP_C)):
+        for k in range(8):
+            if line_idx < len(layer_top_rows[k]):
+                add_row(layer_top_rows[k][line_idx])
+            if line_idx < len(layer_bot_rows[k]):
+                add_row(layer_bot_rows[k][line_idx])
+            if line_idx < len(layer_left_cols[k]):
+                add_col(layer_left_cols[k][line_idx])
+            if line_idx < len(layer_right_cols[k]):
+                add_col(layer_right_cols[k][line_idx])
+        if len(queries) >= BOUNDARY_CAP:
+            return queries[:BOUNDARY_CAP]
+
+    return queries[:BOUNDARY_CAP]
 
 
 class GeometryFirstAdaptive(BaseAlgorithm):
@@ -308,10 +254,9 @@ class GeometryFirstAdaptive(BaseAlgorithm):
         self._disc_idx = 0
         self._phase    = 1   # 1=coarse, 2=boundary, 3=entropy
 
-        # Phase 2 (boundary) binary-search tasks — populated at end of Phase 1
-        self._boundary_tasks: list[_BoundaryTask] = []
-        self._boundary_queries_used = 0
-        self._pending_boundary_task: _BoundaryTask | None = None
+        # Phase 2 (boundary) queries — populated at end of Phase 1
+        self._boundary_queries: list[tuple[int, int]] = []
+        self._boundary_idx = 0
         self._last_query_phase = "coarse"
 
         # Entropy score cache (invalidated by every update)
@@ -336,12 +281,16 @@ class GeometryFirstAdaptive(BaseAlgorithm):
                 return row, col
             self._start_boundary_phase()
 
-        # Phase 2: adaptive bracketed boundary refinement
+        # Phase 2: boundary row/column refinement
         if self._phase == 2:
-            query = self._next_boundary_query()
-            if query is not None:
-                self._last_query_phase = "boundary"
-                return query
+            while self._boundary_idx < len(self._boundary_queries):
+                row, col = self._boundary_queries[self._boundary_idx]
+                self._boundary_idx += 1
+                if not self._obs_mask[row, col]:
+                    if self._boundary_idx >= len(self._boundary_queries):
+                        self._phase = 3
+                    self._last_query_phase = "boundary"
+                    return row, col
             self._phase = 3
 
         # Phase 3: adaptive sum-entropy acquisition
@@ -359,30 +308,11 @@ class GeometryFirstAdaptive(BaseAlgorithm):
         return self._last_query_phase
 
     def _start_boundary_phase(self) -> None:
-        self._boundary_tasks = _build_boundary_tasks(
+        self._boundary_queries = _build_boundary_queries(
             self._obs_mask, self._obs_labels, self.H, self.W
         )
-        self._boundary_queries_used = 0
-        self._pending_boundary_task = None
+        self._boundary_idx = 0
         self._phase = 2
-
-    def _next_boundary_query(self) -> tuple[int, int] | None:
-        while self._boundary_tasks and self._boundary_queries_used < BOUNDARY_CAP:
-            task = self._boundary_tasks.pop(0)
-            if task.converged():
-                continue
-
-            row, col = task.point()
-            if self._obs_mask[row, col]:
-                task.apply(int(self._obs_labels[task.layer, row, col]))
-                if not task.converged():
-                    self._boundary_tasks.append(task)
-                continue
-
-            self._pending_boundary_task = task
-            self._boundary_queries_used += 1
-            return row, col
-        return None
 
     # ── Observation update ───────────────────────────────────────────────────
 
@@ -420,14 +350,6 @@ class GeometryFirstAdaptive(BaseAlgorithm):
 
         self._score_dirty = True
         self._pred_dirty  = True
-
-        if self._pending_boundary_task is not None:
-            task = self._pending_boundary_task
-            if row == task.point()[0] and col == task.point()[1]:
-                task.apply(int(labels[task.layer]))
-                if not task.converged():
-                    self._boundary_tasks.append(task)
-            self._pending_boundary_task = None
 
     # ── Reconstruction ───────────────────────────────────────────────────────
 

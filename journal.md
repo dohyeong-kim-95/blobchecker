@@ -277,6 +277,14 @@ Lessons:
 - Height failures remain. Pure left/right width work is not enough for the 98%
   accuracy target.
 
+Disposition:
+
+- Removed from the active implementation after review. The small accuracy gain
+  did not justify the extra runtime and task-state complexity.
+- Keeping this entry as a caution: binary search may be a valid research idea,
+  but in the current implementation it would add noise when evaluating the next
+  algorithmic change.
+
 ## Durable Lessons
 
 1. Query strategy and reconstruction are coupled. Do not swap reconstruction
