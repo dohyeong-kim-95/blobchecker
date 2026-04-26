@@ -113,6 +113,119 @@ H, W = 50, 200
 iteration_cap = 1500
 ```
 
+## Compute Cost Metric
+
+Iteration count is the primary task cost, but it does not capture algorithm
+runtime. A low-level implementation lane, such as C, Fortran, or
+Nastran-adjacent solver code, must also report an implementation-independent
+operation estimate.
+
+The canonical compute metric is **BOPs**: blobchecker normalized operations.
+One BOP approximates one scalar primitive operation in a tight native loop. The
+metric is not a CPU-cycle claim; it is a stable accounting convention for
+comparing algorithms before Python, interpreter, allocator, BLAS, or hardware
+effects enter the measurement.
+
+### Counted Region
+
+Count all algorithm-core work between the first call to `next_query()` and the
+final `predict()`:
+
+- coordinate planning and acquisition scoring
+- oracle-result state update
+- belief propagation or reconstruction state updates
+- prediction-mask construction
+- connected-component, bounding-box, trimming, hole, and outlier logic inside
+  the algorithm
+
+Do not count:
+
+- dataset generation
+- evaluator scoring
+- logging, printing, JSON serialization, plotting, or file I/O
+- Python interpreter overhead in prototype runs
+- the oracle table lookup itself, except for copying the 8 returned labels into
+  algorithm-owned state
+
+### BOP Weight Table
+
+Use this table when deriving an estimated operation count from source code or
+native instrumentation:
+
+| Primitive | BOPs |
+|---|---:|
+| integer add/subtract/compare/min/max/boolean op | 1 |
+| floating add/subtract/compare/min/max/abs | 1 |
+| integer multiply, bit shift, index arithmetic | 1 |
+| floating multiply or fused multiply-add | 1 |
+| division, modulo, square root | 8 |
+| `log`, `exp`, `pow`, trigonometric function | 32 |
+| scalar load or store from contiguous array | 1 |
+| scalar load or store from non-contiguous or indirect array | 2 |
+| branch with predictable condition | 1 |
+| branch with data-dependent unpredictable condition | 3 |
+| queue/stack push or pop for BFS/connected components | 4 |
+| cache-friendly scan over one scalar array element | load/store plus primitive ops above |
+| FFT, dense linear algebra, or solver library call | report separately with the formula below |
+
+For library calls, report both the formula and the realized estimate:
+
+```text
+fft2_real(H, W)       = 5 * H * W * log2(H * W) BOPs
+dense_matmul(n,m,k)  = 2 * n * m * k BOPs
+dense_cholesky(n)    = (1/3) * n^3 BOPs
+dense_gp_update(n)   = O(n^3) BOPs unless a tighter implementation count is supplied
+```
+
+### Reporting Fields
+
+Every benchmark report that claims native runtime should include:
+
+```python
+{
+    "estimated_bops_total": int,
+    "estimated_bops_per_iteration": float,
+    "estimated_bops_breakdown": {
+        "planning": int,
+        "update": int,
+        "prediction": int,
+        "reconstruction": int,
+        "library_calls": int,
+    },
+    "native_elapsed_seconds": float,
+    "native_bops_per_second": float,
+}
+```
+
+Where:
+
+```python
+native_bops_per_second = estimated_bops_total / native_elapsed_seconds
+```
+
+If the implementation is still Python-only, `estimated_bops_total` may be a
+source-derived estimate and `native_bops_per_second` should be omitted or marked
+as prototype-only.
+
+### Interpretation
+
+BOPs are a proxy for compute time, not a replacement for measured native
+elapsed time. They answer different questions:
+
+- iteration count: how many coordinates were consumed
+- BOPs: how much algorithmic work was required
+- native elapsed time: how fast the implementation actually ran
+- memory: whether the method fits the target execution envelope
+
+Research implications for this project:
+
+- summed entropy, boundary scoring, and occupancy updates should remain around
+  `O(8 * H * W)` per full-grid scoring pass
+- pre-planned greedy coverage is acceptable as a baseline but can be expensive
+  if it rescans the full grid for every planned coordinate
+- dense GP, MOBO, and solver-heavy CS methods must be justified with BOP and
+  memory estimates before implementation
+
 ## Scoring
 
 Core scoring is against `truth_blob_mask` only.
@@ -158,8 +271,9 @@ Among candidate methods, rank lexicographically:
 1. pass/fail status
 2. fewer iterations used
 3. stronger supplemental metrics
-4. lower elapsed time
-5. lower peak memory
+4. lower estimated BOPs
+5. lower native elapsed time
+6. lower peak memory
 
 Supplemental metrics may include blob IoU, positive recall, positive precision,
 boundary error, outlier recall, and outlier precision. They do not replace the
@@ -180,6 +294,7 @@ Open benchmark items:
 
 - reference hardware
 - final hard time budget
+- final hard BOP budget per phase
 - final hard memory budget
 - Phase 1 grid size range
 - Phase 1 seed suite
