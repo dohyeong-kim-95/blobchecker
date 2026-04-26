@@ -13,7 +13,8 @@ from typing import List
 
 from .oracle import Oracle
 
-PHASE0_SEEDS = list(range(10))   # placeholder — freeze before first official run
+PHASE0_SEEDS = list(range(10))   # public development seeds
+PHASE0_VALIDATION_SEEDS = list(range(100, 200))   # tune-resistant validation suite
 ACCURACY_THRESHOLD = 0.98
 
 

@@ -285,10 +285,20 @@ Current Phase 0 implementation uses:
 
 ```python
 PHASE0_SEEDS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+PHASE0_VALIDATION_SEEDS = [100, 101, ..., 199]
 ```
 
-These seeds are still marked as placeholder in code and older docs. Freeze them
-before making official benchmark claims.
+The public seed suite is for development comparison and regression tracking.
+The validation seed suite is for overfitting checks before accepting a new
+algorithm or parameter change.
+
+Rules:
+
+- Do not tune parameters on validation results repeatedly.
+- Report public and validation results separately.
+- Treat public-only improvement with validation regression as overfitting until
+  disproven.
+- Freeze final official seeds before making official benchmark claims.
 
 Open benchmark items:
 
