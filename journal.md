@@ -150,6 +150,72 @@ Remaining error estimate:
 - likely sources are column-boundary uncertainty, boundary-adjacent outliers,
   and residual shape errors
 
+## 2026-04-26 — Left/Right Boundary Targeting
+
+Hypothesis:
+
+The top/bottom confirmed-zero trim reduced height overshoot, so applying the
+same idea to left/right edges should reduce width overshoot without using
+truth-specific information.
+
+Changes:
+
+- Phase 2 boundary refinement now scans four sides: top, bottom, left, right.
+- Row scans use a coarse column stride; column scans use a coarse row stride so
+  each scanned line costs about the same number of queries on the Phase 0 grid.
+- Boundary queries are round-robin by layer and side so one layer or one side
+  does not consume the whole boundary budget.
+- `predict()` now trims confirmed-outside rows and columns. A boundary line is
+  removed only when it has observed zero evidence and no observed positive
+  evidence for that layer.
+
+Overfitting guard:
+
+- This is a geometric symmetry extension of the existing top/bottom trim, not a
+  seed-specific coordinate schedule.
+- Accepting it still requires public and validation seed results to move in the
+  same direction. Public-only improvement should be treated as overfitting.
+
+Results:
+
+```text
+public seeds [0..9]:
+  pass: 0/10
+  mean_min_accuracy: 0.9693
+  mean_time: 1.5s/seed
+
+validation seeds [100..109]:
+  pass: 0/10
+  mean_min_accuracy: 0.9677
+  mean_time: 1.6s/seed
+```
+
+Interpretation:
+
+- Width recovery looked stable in these runs: every reported public and
+  validation layer had `w_ok=True`.
+- Public mean min accuracy was slightly below the previous journal result
+  `0.9695`, so this should not be treated as a net accuracy improvement yet.
+- Height overshoot remains a visible failure mode on several seeds.
+
+Verification:
+
+- Python syntax compilation passed for the changed modules.
+- Boundary-query and trim helper behavior was checked with a local scipy stub.
+- A local `.venv` with `requirements.txt` was used for benchmark execution.
+
+Lessons:
+
+- Boundary-targeting changes should be evaluated as a family of four symmetric
+  sides. Tuning only the failing visible dimension risks matching the public
+  seed suite rather than improving the underlying level-set estimate.
+- The validation suite added earlier is now a required gate before treating this
+  change as a performance improvement.
+- Left/right trim appears to help width stability, but the extra boundary
+  budget may be taking useful queries away from entropy acquisition. The next
+  iteration should compare boundary budget allocations instead of assuming more
+  boundary scans are always better.
+
 ## Durable Lessons
 
 1. Query strategy and reconstruction are coupled. Do not swap reconstruction

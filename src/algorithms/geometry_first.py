@@ -7,11 +7,10 @@ Phase 1 — Coarse discovery (~250 iterations)
   Queries a stride-(5,8) grid.  With PROP_RADIUS=4 every interior pixel is
   within propagation range of at least one Phase 1 observation.
 
-Phase 2 — Boundary row refinement (~200 iterations)
-  Scans rows in the zone between the last coarse-grid outside row and the
-  first coarse-grid inside row for each layer's detected top/bottom edge.
-  Observations here are used by the trim step in predict() to remove
-  overshoot rows (confirmed label=0, no label=1) from the prediction.
+Phase 2 — Boundary refinement (~320 iterations)
+  Scans just outside the detected top/bottom/left/right edges for each layer.
+  Observations here are used by the trim step in predict() to remove overshoot
+  rows or columns (confirmed label=0, no label=1) from the prediction.
 
 Phase 3 — Adaptive entropy acquisition (remaining ~1050 iterations)
   Picks the unqueried pixel with the highest sum-of-entropies:
@@ -22,8 +21,8 @@ Phase 3 — Adaptive entropy acquisition (remaining ~1050 iterations)
 Reconstruction
 --------------
 predict() thresholds the belief tensor at 0.5, keeps the largest
-8-connected component, then trims top/bottom rows that are confirmed outside
-the blob (observed label=0, no observed label=1 for that layer).  This
+8-connected component, then trims boundary rows/columns that are confirmed
+outside the blob (observed label=0, no observed label=1 for that layer).  This
 directly corrects the systematic h_pred > h_truth overestimation caused by
 belief-propagation overshoot.
 """
@@ -42,10 +41,10 @@ PROP_RADIUS = 4      # was 3; wider coverage per query
 PROP_DECAY  = 0.60   # was 0.65; reduced to limit overshoot at larger radius
 
 # ── Boundary refinement (Phase 2) ───────────────────────────────────────────
-# Scans the coarse-step gap above/below detected blob edge.
-# Column stride 5 ensures ≥1 sample per PROP_RADIUS=4 neighbourhood.
-BOUNDARY_SCAN_STEP = 20   # coarse column stride: 10 queries/row, robust for wide blobs
-BOUNDARY_CAP       = 200  # ~200 queries: ~25/layer × 8 layers with round-robin
+# Scans the coarse-step gap outside detected blob edges.
+BOUNDARY_ROW_SCAN_STEP = 20  # 10 queries per scanned row on 50×200 Phase 0 grid
+BOUNDARY_COL_SCAN_STEP = 5   # 10 queries per scanned column on 50×200 Phase 0 grid
+BOUNDARY_CAP = 320           # one outside band for 4 sides × 8 layers, less duplicates
 
 # ── Reconstruction ───────────────────────────────────────────────────────────
 BELIEF_THRESHOLD = 0.5
@@ -67,39 +66,44 @@ def _largest_component(mask2d: np.ndarray) -> np.ndarray:
     return (labeled == sizes.argmax()).astype(np.uint8)
 
 
-def _trim_boundary_rows(
+def _line_confirmed_outside(
+    observed: np.ndarray,
+    labels: np.ndarray,
+) -> bool:
+    """Return True when a row/column has zero evidence and no positive evidence."""
+    if not observed.any():
+        return False
+    has_one = bool((observed & (labels == 1)).any())
+    has_zero = bool((observed & (labels == 0)).any())
+    return has_zero and not has_one
+
+
+def _trim_confirmed_boundary(
     mask: np.ndarray,
     obs_mask: np.ndarray,
     obs_labels_k: np.ndarray,
 ) -> np.ndarray:
     """
-    Remove top/bottom rows of `mask` that are confirmed outside the blob.
+    Remove boundary rows/columns of `mask` that are confirmed outside the blob.
 
-    A row is "confirmed outside" if it has at least one observed label=0
-    AND no observed label=1 for this layer.  Rows with no observations at all
-    are kept (uncertain — leave them to entropy acquisition to correct).
+    A row or column is "confirmed outside" if it has at least one observed
+    label=0 AND no observed label=1 for this layer.  Lines with no observations
+    are kept because they remain uncertain.
 
-    This post-processing step eliminates h_pred > h_truth overshoot caused by
-    belief propagation from inside-blob pixels pushing adjacent outside pixels
-    above the 0.5 threshold.
+    This post-processing step eliminates bbox overshoot caused by belief
+    propagation from inside-blob pixels pushing adjacent outside pixels above
+    the 0.5 threshold.
     """
     result = mask.copy()
-
-    def confirmed_outside(r: int) -> bool:
-        row_obs = obs_mask[r]
-        if not row_obs.any():
-            return False
-        has_one  = bool((row_obs & (obs_labels_k[r] == 1)).any())
-        has_zero = bool((row_obs & (obs_labels_k[r] == 0)).any())
-        return has_zero and not has_one
 
     # Trim from top
     while True:
         rows = np.where(result.any(axis=1))[0]
         if rows.size == 0:
             break
-        if confirmed_outside(int(rows[0])):
-            result[rows[0], :] = 0
+        r = int(rows[0])
+        if _line_confirmed_outside(obs_mask[r], obs_labels_k[r]):
+            result[r, :] = 0
         else:
             break
 
@@ -108,8 +112,31 @@ def _trim_boundary_rows(
         rows = np.where(result.any(axis=1))[0]
         if rows.size == 0:
             break
-        if confirmed_outside(int(rows[-1])):
-            result[rows[-1], :] = 0
+        r = int(rows[-1])
+        if _line_confirmed_outside(obs_mask[r], obs_labels_k[r]):
+            result[r, :] = 0
+        else:
+            break
+
+    # Trim from left
+    while True:
+        cols = np.where(result.any(axis=0))[0]
+        if cols.size == 0:
+            break
+        c = int(cols[0])
+        if _line_confirmed_outside(obs_mask[:, c], obs_labels_k[:, c]):
+            result[:, c] = 0
+        else:
+            break
+
+    # Trim from right
+    while True:
+        cols = np.where(result.any(axis=0))[0]
+        if cols.size == 0:
+            break
+        c = int(cols[-1])
+        if _line_confirmed_outside(obs_mask[:, c], obs_labels_k[:, c]):
+            result[:, c] = 0
         else:
             break
 
@@ -123,56 +150,75 @@ def _build_boundary_queries(
     W: int,
 ) -> list[tuple[int, int]]:
     """
-    After Phase 1, scan the coarse-step gap above/below each layer's detected
-    blob edge.  These observations give the trim step confirmed label=0 rows
-    to eliminate from the final prediction.
+    After Phase 1, scan the coarse-step gap outside each layer's detected blob
+    edges.  These observations give the trim step confirmed label=0 lines to
+    eliminate from the final prediction.
 
-    Round-robin across all 8 layers (innermost row first) so every layer gets
-    boundary coverage before the BOUNDARY_CAP is consumed by early layers.
+    Round-robin across sides and layers (innermost line first) so every layer
+    gets boundary coverage before the BOUNDARY_CAP is consumed by early layers.
     Returned list is deduplicated and capped at BOUNDARY_CAP.
     """
-    # Collect boundary row ranges per layer (innermost first)
+    # Collect boundary line ranges per layer (innermost first)
     layer_top_rows: list[list[int]] = []
     layer_bot_rows: list[list[int]] = []
+    layer_left_cols: list[list[int]] = []
+    layer_right_cols: list[list[int]] = []
 
     for k in range(8):
         has_pos = obs_mask & (obs_labels[k] == 1)
         pos_rows = np.where(has_pos.any(axis=1))[0]
-        if pos_rows.size == 0:
+        pos_cols = np.where(has_pos.any(axis=0))[0]
+        if pos_rows.size == 0 or pos_cols.size == 0:
             layer_top_rows.append([])
             layer_bot_rows.append([])
+            layer_left_cols.append([])
+            layer_right_cols.append([])
             continue
         top_r = int(pos_rows[0])
         bot_r = int(pos_rows[-1])
+        left_c = int(pos_cols[0])
+        right_c = int(pos_cols[-1])
         # Innermost first (top_r-1, top_r-2, ..., top_r-COARSE_STEP_R)
         tops = list(reversed(range(max(0, top_r - COARSE_STEP_R), top_r)))
         # Innermost first (bot_r+1, bot_r+2, ...)
         bots = list(range(bot_r + 1, min(H, bot_r + COARSE_STEP_R + 1)))
+        # Innermost first (left_c-1, left_c-2, ..., left_c-COARSE_STEP_C)
+        lefts = list(reversed(range(max(0, left_c - COARSE_STEP_C), left_c)))
+        # Innermost first (right_c+1, right_c+2, ...)
+        rights = list(range(right_c + 1, min(W, right_c + COARSE_STEP_C + 1)))
         layer_top_rows.append(tops)
         layer_bot_rows.append(bots)
+        layer_left_cols.append(lefts)
+        layer_right_cols.append(rights)
 
     queries: list[tuple[int, int]] = []
     seen: set[tuple[int, int]] = set()
 
     def add_row(r: int) -> None:
-        for c in range(0, W, BOUNDARY_SCAN_STEP):
+        for c in range(0, W, BOUNDARY_ROW_SCAN_STEP):
             key = (r, c)
             if not obs_mask[r, c] and key not in seen:
                 queries.append(key)
                 seen.add(key)
 
-    # Round-robin: one row per layer per pass, top boundaries first
-    for row_idx in range(COARSE_STEP_R):
-        for k in range(8):
-            if row_idx < len(layer_top_rows[k]):
-                add_row(layer_top_rows[k][row_idx])
-        if len(queries) >= BOUNDARY_CAP:
-            return queries[:BOUNDARY_CAP]
+    def add_col(c: int) -> None:
+        for r in range(0, H, BOUNDARY_COL_SCAN_STEP):
+            key = (r, c)
+            if not obs_mask[r, c] and key not in seen:
+                queries.append(key)
+                seen.add(key)
 
-    for row_idx in range(COARSE_STEP_R):
+    # Round-robin: one outside line per side per layer per pass.
+    for line_idx in range(max(COARSE_STEP_R, COARSE_STEP_C)):
         for k in range(8):
-            if row_idx < len(layer_bot_rows[k]):
-                add_row(layer_bot_rows[k][row_idx])
+            if line_idx < len(layer_top_rows[k]):
+                add_row(layer_top_rows[k][line_idx])
+            if line_idx < len(layer_bot_rows[k]):
+                add_row(layer_bot_rows[k][line_idx])
+            if line_idx < len(layer_left_cols[k]):
+                add_col(layer_left_cols[k][line_idx])
+            if line_idx < len(layer_right_cols[k]):
+                add_col(layer_right_cols[k][line_idx])
         if len(queries) >= BOUNDARY_CAP:
             return queries[:BOUNDARY_CAP]
 
@@ -308,7 +354,7 @@ class GeometryFirstAdaptive(BaseAlgorithm):
             mask = (self._p[k] >= BELIEF_THRESHOLD).astype(np.uint8)
             if mask.any():
                 mask = _largest_component(mask)
-                mask = _trim_boundary_rows(
+                mask = _trim_confirmed_boundary(
                     mask, self._obs_mask, self._obs_labels[k]
                 )
             predicted[k] = mask
