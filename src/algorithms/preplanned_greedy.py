@@ -29,13 +29,9 @@ pre-planned queries happen to land inside them.
 
 import numpy as np
 from scipy.signal import fftconvolve
-from scipy.ndimage import label as ndlabel
 
 from .base import BaseAlgorithm
-
-# Hole-suppression half-width: when an observed 0 sits inside a positive
-# scanline span, we clear a ±HOLE_HALF pixels neighbourhood around it.
-HOLE_HALF = 4
+from .reconstruct import scanline_reconstruct
 
 
 # ---------------------------------------------------------------------------
@@ -75,81 +71,6 @@ def _preplan_greedy(H: int, W: int, budget: int, radius: int) -> list:
         covered[r0:r1, c0:c1] = 1.0
 
     return schedule
-
-
-# ---------------------------------------------------------------------------
-# Reconstruction helpers
-# ---------------------------------------------------------------------------
-
-def _reconstruct_layer(
-    H: int,
-    W: int,
-    obs_mask: np.ndarray,      # (H, W) bool
-    obs_labels_k: np.ndarray,  # (H, W) uint8, valid only where obs_mask
-) -> np.ndarray:
-    """
-    Row-wise scanline fill for one layer.
-
-    For each row:
-      1. Find the leftmost and rightmost observed positive.
-      2. Fill [left, right] with 1.
-      3. Erase a neighbourhood around any observed zero inside that span.
-
-    Rows with no observations copy the prediction of the nearest observed row.
-    """
-    pred = np.zeros((H, W), dtype=np.uint8)
-    observed_rows = []
-
-    for r in range(H):
-        row_mask = obs_mask[r]           # (W,) bool
-        if not row_mask.any():
-            continue
-
-        queried_cols = np.where(row_mask)[0]
-        labels = obs_labels_k[r, queried_cols]
-
-        pos_cols = queried_cols[labels == 1]
-        if pos_cols.size == 0:
-            observed_rows.append(r)
-            continue
-
-        c_left = int(pos_cols.min())
-        c_right = int(pos_cols.max())
-        pred[r, c_left : c_right + 1] = 1
-
-        # Suppress neighbourhood around interior observed zeros (holes).
-        neg_cols = queried_cols[
-            (labels == 0) & (queried_cols >= c_left) & (queried_cols <= c_right)
-        ]
-        for c in neg_cols:
-            lo = max(c_left, c - HOLE_HALF)
-            hi = min(c_right + 1, c + HOLE_HALF + 1)
-            pred[r, lo:hi] = 0
-
-        observed_rows.append(r)
-
-    # Propagate to rows that had no observations.
-    if not observed_rows:
-        return pred
-
-    observed_rows_arr = np.array(observed_rows)
-    for r in range(H):
-        if obs_mask[r].any():
-            continue
-        nearest = observed_rows_arr[np.argmin(np.abs(observed_rows_arr - r))]
-        pred[r] = pred[nearest]
-
-    # Keep only the largest 8-connected component to suppress
-    # isolated outlier pixels that would otherwise inflate the bbox.
-    if pred.any():
-        struct8 = np.ones((3, 3), dtype=np.int32)
-        labeled, n = ndlabel(pred, structure=struct8)
-        if n > 1:
-            sizes = np.bincount(labeled.ravel())
-            sizes[0] = 0
-            pred = (labeled == sizes.argmax()).astype(np.uint8)
-
-    return pred
 
 
 # ---------------------------------------------------------------------------
@@ -200,14 +121,9 @@ class PreplannedGreedy(BaseAlgorithm):
         if not self._cache_dirty and self._pred_cache is not None:
             return self._pred_cache
 
-        predicted = np.zeros((8, self.H, self.W), dtype=np.uint8)
-        for k in range(8):
-            predicted[k] = _reconstruct_layer(
-                self.H, self.W,
-                self._obs_mask,
-                self._obs_labels[k],
-            )
-
+        predicted = scanline_reconstruct(
+            self.H, self.W, self._obs_mask, self._obs_labels
+        )
         self._pred_cache = predicted
         self._cache_dirty = False
         return predicted
