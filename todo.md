@@ -74,3 +74,37 @@ Reconstruct the continuous waveform as follows:
 - The MIDDLE bit (index 1) of each 3-bit sequence is the "target bit" being sampled
 - Use 16 preamble bits (all 0) + 3-bit pattern + 16 postamble bits (all 0)
 - Total = 35 bits per pattern. This ensures ISI from taps[1:4] fully decays.
+
+### 6) Jitter model
+Two components applied at different stages:
+
+**DCD (Deterministic Jitter — Duty Cycle Distortion):**
+- Applied to bit boundary POSITIONS (edge timing), NOT to sampled voltage
+- For each bit boundary between consecutive bits:
+  - If transition is '0'→'1' (rising edge): shift edge RIGHT by +0.01 UI
+  - If transition is '1'→'0' (falling edge): shift edge LEFT by -0.01 UI
+  - If no transition (0→0 or 1→1): no DCD applied
+- Physical meaning: HIGH pulse width deviates from 50% duty cycle
+- DCD is applied during waveform reconstruction (step 4 above), not as a separate pass
+
+**RJ (Random Jitter):**
+- Gaussian distribution: RJ = σ_RJ × randn() where σ_RJ = 0.015 UI
+- Applied to the SAMPLING POINT only (not to edge positions)
+- For each (timing, vref) grid point, run N=100 Monte Carlo iterations
+- Each iteration independently perturbs the sampling instant:
+  t_sample = t_ideal + timing_offset + RJ_perturbation
+
+**DJ_ISI (ISI-induced Deterministic Jitter):**
+- Already captured by the discrete ISI tap convolution in step 2 — do NOT add separately.
+
+### 7) Pass/Fail decision
+At each (timing_offset, vref_level) point:
+- For each of 8 patterns:
+  - Generate 35-bit sequence (16 preamble + pattern + 16 postamble)
+  - Apply discrete ISI convolution → soft_saturate → reconstruct continuous waveform with DCD
+  - For each of 100 Monte Carlo iterations:
+    - Sample voltage at: (target_bit_center + timing_offset + RJ_perturbation)
+    - If target_bit == 1: PASS if V_sampled > Vref
+    - If target_bit == 0: PASS if V_sampled < Vref
+  - Pattern passes only if ALL 100 MC iterations pass
+- Overall point PASS only if ALL 8 patterns pass
