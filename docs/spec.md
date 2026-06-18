@@ -5,26 +5,33 @@ contract. For decisions, start with [../README.md](../README.md).
 
 ## Problem
 
-Estimate 8 binary blob maps on a shared 2D grid.
+Estimate 16 binary blob maps on a shared 2D grid.
 
 At each iteration, an algorithm chooses one coordinate `(row, col)`. The same
-coordinate is queried across all 8 layers, producing an 8-value observation
+coordinate is queried across all 16 layers, producing a 16-value observation
 vector. A coordinate selection is the atomic cost unit.
 
-The algorithm knows only the grid shape `(H, W)` before querying begins. It has
-no prior knowledge of blob position, blob size, coverage, holes, or outlier
-presence.
+The blob source is a **DRAM Shmoo Plot** physical model: each layer's blob is
+the PASS region of a shmoo over `(timing, vref)`. See
+[shmoo_model.md](shmoo_model.md) for the generator's canonical design.
+
+The algorithm knows only the grid shape `(H, W) = (150, 200)` before querying
+begins. It has no prior knowledge of blob position, blob size, or coverage.
 
 ## Data Contract
 
 The dataset generator emits three aligned tensors:
 
 ```python
-truth_blob_mask.shape    == (8, H, W)
-truth_outlier_mask.shape == (8, H, W)
-truth_full_mask.shape    == (8, H, W)
+truth_blob_mask.shape    == (16, H, W)   # H=150 (Vref rows), W=200 (timing cols)
+truth_outlier_mask.shape == (16, H, W)
+truth_full_mask.shape    == (16, H, W)
 truth_full_mask = truth_blob_mask | truth_outlier_mask
 ```
+
+In the current Shmoo domain there are no outliers, so `truth_outlier_mask` is
+all zeros and `truth_full_mask == truth_blob_mask`. The three-tensor signature
+is kept for backward compatibility.
 
 Meanings:
 
@@ -50,17 +57,20 @@ The algorithm cannot directly distinguish blob positives from outlier positives.
 
 ## Blob Model
 
-Each layer has exactly one meaningful blob.
+Each layer has exactly one meaningful blob: the PASS region of a DRAM Shmoo
+Plot. The full physical model (RC edges, soft saturation, discrete ISI taps,
+DCD, RJ, per-layer diversity) is canonical in [shmoo_model.md](shmoo_model.md).
 
 Required structural properties:
 
 | Property | Contract |
 |---|---|
-| Connectivity | One 8-connected meaningful blob per layer. |
-| Coverage | Median 40%, standard deviation 5%, truncated to `[30%, 70%]`. |
-| Boundary | Locally coherent, not pixel-level random noise. |
-| Holes | 0 to 3 interior holes, about 7 x 7 pixels on average. |
-| Outliers | Optional sparse external positive pixels. |
+| Connectivity | One 8-connected PASS region (eye) per layer. |
+| Coverage | Target 50% mean (coverage ladder C1; TODO lower in later stages). |
+| Boundary | Physically coherent eye boundary set by ISI/DCD/RJ envelope. |
+| Holes | None (eye interior is monotonically PASS). |
+| Outliers | None (eye exterior is monotonically FAIL). |
+| Diversity | Per-pattern per-layer horizontal skew + per-layer ISI scaling. |
 
 Layers are generated independently.
 
@@ -106,11 +116,11 @@ The active iteration cap is:
 iteration_cap = int(0.15 * H * W)
 ```
 
-For Phase 0:
+For the current grid:
 
 ```python
-H, W = 50, 200
-iteration_cap = 1500
+H, W = 150, 200
+iteration_cap = 4500
 ```
 
 ### Development Budget Ladder
@@ -119,12 +129,12 @@ The official submission cap remains `int(0.15 * H * W)`. During development,
 candidate algorithms should also be evaluated at wider query budgets so that
 algorithm structure and budget compression are not conflated.
 
-| Development phase | Budget ratio | Phase 0 iterations | Purpose |
+| Development phase | Budget ratio | 150x200 iterations | Purpose |
 |---|---:|---:|---|
-| Phase A | 50% | 5,000 | Find a structure that can pass before optimizing query count. |
-| Phase B | 30% | 3,000 | Remove redundant queries and rebalance phase allocations. |
-| Phase C | 20% | 2,000 | Compress weakest-layer, boundary, and hole priorities. |
-| Phase D | 15% | 1,500 | Match the official submission condition. |
+| Phase A | 50% | 15,000 | Find a structure that can pass before optimizing query count. |
+| Phase B | 30% | 9,000 | Remove redundant queries and rebalance phase allocations. |
+| Phase C | 20% | 6,000 | Compress weakest-layer and boundary priorities. |
+| Phase D | 15% | 4,500 | Match the official submission condition. |
 
 Rules:
 

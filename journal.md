@@ -317,6 +317,47 @@ Lessons:
   algorithm change mixes three questions: whether the idea works, whether it
   fits the cap, and whether it overfits the current public seeds.
 
+## 2026-06-18 — Domain Pivot to DRAM Shmoo Generator
+
+Problem:
+
+- The gaussian-smoothing generator produced blobs that did not match the
+  intended domain. The owner's real domain is DRAM I/O Shmoo characterization.
+
+Decision:
+
+- Replace the data generator with a DRAM Shmoo Plot physical model. The PASS
+  region of a shmoo over `(timing, vref)` is the blob. Canonical design lives in
+  [docs/shmoo_model.md](docs/shmoo_model.md); the raw requirement prompt is
+  preserved in [todo.md](todo.md).
+
+Contract changes:
+
+- Output `(16, 150, 200)`: 16 layers, H=150 rows (Vref), W=200 cols (timing).
+- Coverage target 50% (coverage ladder C1; lower in later stages — TODO).
+- No holes, no outliers. `truth_outlier=0`, `truth_full==truth_blob`.
+- Iteration cap `int(0.15*150*200) = 4500`.
+
+Generator design notes (pre-implementation):
+
+- Layer diversity = per-pattern per-layer horizontal skew (main source) plus
+  per-layer ISI tap-magnitude scaling (vertical/height variety). Uniform skew
+  across all patterns only translates the eye; it must be per-pattern.
+- "All MC pass" collapses to `min/max` over MC per pattern, then a Vref-axis
+  broadcast and an 8-pattern AND. Big speedup and a clean boundary.
+
+Implementation traps recorded ahead of coding:
+
+- `np.convolve(..., mode='same')` misaligns the main cursor by one bit for the
+  even-length tap kernel. Use causal convolution and verify `received[17]`.
+- Sampling needs linear interpolation; nearest-sample aliases RJ because
+  `1/64 UI ≈ σ_RJ`.
+
+Status:
+
+- Documentation renewed (README, spec, this journal, shmoo_model). Code is not
+  implemented yet; the codebase is being cleaned first.
+
 ## Durable Lessons
 
 1. Query strategy and reconstruction are coupled. Do not swap reconstruction
@@ -333,3 +374,7 @@ Lessons:
 7. Do not optimize only at 15% until a pass-capable structure exists at a wider
    budget. Use the budget ladder to separate algorithm viability from query
    compression.
+8. Generator domain must match the owner's real domain. The blob source is now
+   physical (DRAM Shmoo), not synthetic gaussian noise.
+9. For the Shmoo generator, two correctness traps dominate: causal ISI
+   convolution (not `mode='same'`) and interpolated sampling (not nearest).

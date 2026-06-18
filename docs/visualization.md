@@ -1,5 +1,10 @@
 # Strategy Visualization
 
+> Dataset (blob) visualization is separate. For inspecting generated blob
+> layers, see `tools/visualize_blobs.py`. This document covers solver/strategy
+> diagnostics. The Shmoo generator's own plots (shmoo map + eye diagram) are
+> specified in [shmoo_model.md](shmoo_model.md) and are not yet implemented.
+
 The diagnostic workflow separates algorithm execution from rendering:
 
 ```bash
