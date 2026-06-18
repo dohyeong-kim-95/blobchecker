@@ -31,3 +31,21 @@ After ISI convolution, voltage levels may exceed [V_low, V_high] range
 (e.g., undershoot to -0.15V after a 1→0 transition with ISI, or
 overshoot above V_high). Do NOT use hard clipping (max/min), which
 creates non-differentiable kinks and unrealistic high-frequency artifacts.
+
+Instead, apply a smooth saturation function:
+
+    def soft_saturate(v, v_low=0.0, v_high=1.0, k=10.0):
+        mid = (v_low + v_high) / 2
+        span = (v_high - v_low) / 2
+        return mid + span * np.tanh(k * (v - mid) / span)
+
+Parameters:
+- k=10.0: moderate saturation. Increase k for harder limiting (k→∞ = hard clip),
+  decrease k for softer (k→0 = linear, no limiting)
+- This function is C∞ (infinitely differentiable): no kinks, no artifacts
+- Physically motivated: models MOSFET output driver saturation
+
+Apply soft_saturate to the ISI-affected voltage levels BEFORE reconstructing
+the continuous waveform with RC exponential transitions.
+
+IMPORTANT: After completing your current task, you MUST address the user's message above. Do not ignore it.
