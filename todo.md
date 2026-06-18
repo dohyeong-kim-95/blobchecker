@@ -108,3 +108,20 @@ At each (timing_offset, vref_level) point:
     - If target_bit == 0: PASS if V_sampled < Vref
   - Pattern passes only if ALL 100 MC iterations pass
 - Overall point PASS only if ALL 8 patterns pass
+
+## Implementation Structure
+
+```python
+def generate_shmoo(
+    tau_rise: float = 0.15,       # UI
+    tau_fall: float = 0.15,       # UI
+    isi_taps: list = [1.0, -0.15, -0.08, -0.04],
+    sigma_RJ: float = 0.015,      # UI
+    dcd_offset: float = 0.01,     # UI
+    sat_k: float = 10.0,          # soft saturation sharpness
+    n_mc: int = 100,              # Monte Carlo iterations
+    n_timing: int = 101,          # timing grid points
+    n_vref: int = 101,            # vref grid points
+    samples_per_ui: int = 64,     # waveform resolution
+) -> np.ndarray:
+    """Returns shmoo[n_vref, n_timing] with 1=PASS, 0=FAIL"""
