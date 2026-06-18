@@ -125,3 +125,45 @@ def generate_shmoo(
     samples_per_ui: int = 64,     # waveform resolution
 ) -> np.ndarray:
     """Returns shmoo[n_vref, n_timing] with 1=PASS, 0=FAIL"""
+
+### Vectorization strategy
+- **Vectorize**: timing×vref grid operations (101×101 = 10,201 points at once)
+- **Vectorize**: waveform generation (use np.convolve for ISI)
+- **Loop acceptable**: over 8 patterns (unavoidable — different bit sequences)
+- **Loop acceptable**: over Monte Carlo iterations (100 iterations, each with independent RJ)
+- **DO NOT**: loop over individual timing or vref points in Python
+
+## Output Requirements
+
+1. Generate 2D shmoo map as numpy array: shape (n_vref, n_timing), dtype=bool
+2. Plot using matplotlib with:
+   - X-axis: Timing offset (UI), range [-0.5, 0.5]
+   - Y-axis: Vref level (mV), range [200, 800]
+   - PASS = green/white, FAIL = red/black
+   - Title: "Synthetic DRAM Shmoo Plot (ISI + DCD + RJ)"
+3. Generate an eye diagram:
+   - For each of the 8 patterns, extract the waveform from -0.5 UI to +0.5 UI
+     relative to the target bit center
+   - Overlay all 8 patterns in one figure with different colors and a legend
+   - Add horizontal dashed line at Vref=500mV and vertical dashed line at timing=0
+   - Use soft_saturate to show smooth saturation curves, no hard kinks
+4. Print a summary table:
+   - For each pattern: effective eye height (mV), effective eye width (UI)
+   - Eye height = min(V_high_at_center) - max(V_low_at_center) across all patterns
+   - Eye width = timing range where ALL patterns pass at Vref=500mV
+
+## Code quality
+- Type hints and docstrings on all functions
+- Separate into modules: signal_gen.py, channel_model.py, jitter_model.py, shmoo_eval.py, plotting.py
+- Include `if __name__ == "__main__"` block with default parameters
+- Use numpy.random.seed(42) for reproducibility
+- Print execution time for the full shmoo generation
+
+## Parameter sweep guidance
+Allow user to adjust via generate_shmoo() parameters:
+- More ISI (larger tap magnitudes) → smaller eye
+- More RJ (larger sigma_RJ) → fuzzier shmoo boundaries
+- More DCD (larger dcd_offset) → asymmetric eye (left/right width differs)
+- Softer saturation (smaller sat_k) → smoother but less realistic clipping
+- Harder saturation (larger sat_k) → closer to real MOSFET rail behavior
+```
