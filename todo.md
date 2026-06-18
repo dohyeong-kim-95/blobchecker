@@ -48,4 +48,29 @@ Parameters:
 Apply soft_saturate to the ISI-affected voltage levels BEFORE reconstructing
 the continuous waveform with RC exponential transitions.
 
-IMPORTANT: After completing your current task, you MUST address the user's message above. Do not ignore it.
+### 4) Waveform reconstruction from ISI-affected voltage levels
+After discrete ISI convolution + soft saturation, each UI has an effective
+voltage level (which may be non-binary due to ISI, e.g., 0.85V or 0.05V).
+Reconstruct the continuous waveform as follows:
+
+1. Create time array with 64 samples per UI
+2. For each UI boundary (bit transition), apply RC exponential:
+   - If V_next > V_current (rising):
+     V(t) = V_current + (V_next - V_current) × (1 - exp(-t_local / τ_rise))
+     where t_local = time since the transition edge
+   - If V_next < V_current (falling):
+     V(t) = V_current + (V_next - V_current) × (1 - exp(-t / τ_fall))
+   - If V_next == V_current: flat (no transition)
+3. IMPORTANT: DCD shifts the START of each transition, not the target level.
+   - '0→1' edge starts at: ideal_edge_time + dcd_offset (shifted right)
+   - '1→0' edge starts at: ideal_edge_time - dcd_offset (shifted left)
+   - Between the DCD-shifted edge and the next edge, the RC exponential
+     transition occurs from V_current toward V_next
+4. Result: continuous voltage waveform with ISI + DCD effects,
+   sampleable at any timing offset
+
+### 5) Data patterns
+- Test ALL 8 patterns of 3-bit sequences: 000, 001, 010, 011, 100, 101, 110, 111
+- The MIDDLE bit (index 1) of each 3-bit sequence is the "target bit" being sampled
+- Use 16 preamble bits (all 0) + 3-bit pattern + 16 postamble bits (all 0)
+- Total = 35 bits per pattern. This ensures ISI from taps[1:4] fully decays.
