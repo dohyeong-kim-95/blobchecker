@@ -358,6 +358,39 @@ Status:
 - Documentation renewed (README, spec, this journal, shmoo_model). Code is not
   implemented yet; the codebase is being cleaned first.
 
+## 2026-06-18 — Shmoo Generator Implementation
+
+Implemented `src/shmoo/` (signal_gen, channel_model, jitter_model, shmoo_eval,
+plotting) plus `tools/visualize_shmoo.py`. Generates `(16, 150, 200)` uint8.
+
+Results (seed 0):
+
+```text
+generated (16, 150, 200) in 0.08s
+mean coverage 50.0%  [min 43.3%, max 57.2%]
+self-checks passed: ISI alignment, MC collapse
+```
+
+Verification:
+
+- `received[17]` matches the causal ISI formula (avoids the `np.convolve`
+  `mode='same'` one-bit misalignment trap).
+- MC-collapse `min/max` threshold is bit-for-bit equal to an explicit
+  all-MC/all-pattern AND on a small grid (`_check_mc_collapse`).
+- Coverage auto-calibrated to the target via one global guard band, binary
+  searched over the per-layer envelopes (which are guard-independent, so the
+  search is cheap and stable).
+
+Observations:
+
+- With `sat_k=10` the center voltage saturates to ~0/1, so eye height is nearly
+  constant (~568 mV); inter-layer diversity shows up mainly as width
+  (0.65-0.78 UI) and coverage. Lower `sat_k` for more vertical variety.
+- The single-bit eye opens asymmetrically (~`[-0.2, +0.5] UI`) because the
+  leading-edge rise time eats the left of the window. Physically expected.
+
+Dropped `scipy` from requirements (no longer used); added `matplotlib`.
+
 ## Durable Lessons
 
 1. Query strategy and reconstruction are coupled. Do not swap reconstruction

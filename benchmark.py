@@ -41,19 +41,21 @@ def _select_seed_suites(args) -> dict[str, list[int]]:
 
 
 def run_seed(seed: int, algo_name: str, verbose: bool = True) -> dict:
-    # TODO: replace with Shmoo generator once implemented
-    # from src.shmoo.shmoo_eval import generate_shmoo
-    # truth_blob = generate_shmoo(seed=seed, n_vref=H, n_timing=W, n_layers=N_LAYERS)
-    # truth_out  = np.zeros_like(truth_blob)
-    # truth_full = truth_blob.copy()
+    # Generator is implemented; algorithms are not yet designed for this domain.
+    from src.shmoo import generate_dataset
 
-    # TODO: replace with Shmoo-domain algorithm once designed
+    truth_blob, truth_out, truth_full = generate_dataset(
+        H=H, W=W, seed=seed, n_layers=N_LAYERS
+    )
+    evaluator = Evaluator(truth_blob, truth_out, truth_full)
+
+    # TODO: replace with a Shmoo-domain algorithm once designed.
     # from src.algorithms.<new_algo> import NewAlgorithm
     # algorithm = NewAlgorithm(H, W, evaluator.iteration_cap)
-
+    # return evaluator.run(algorithm, seed=seed, phase=1)._as_dict()
     raise NotImplementedError(
-        "Shmoo generator and Shmoo-domain algorithms are not yet implemented. "
-        "See docs/shmoo_model.md for the design spec."
+        f"Dataset ready (cap={evaluator.iteration_cap}); no Shmoo-domain "
+        "algorithm implemented yet. See docs/shmoo_model.md."
     )
 
 

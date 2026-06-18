@@ -16,8 +16,25 @@
 데이터 생성기를 가우시안 스무딩 블롭에서 **DRAM Shmoo Plot 물리 모델**로
 전환합니다. Shmoo의 PASS 영역이 곧 blob이며, ISI/DCD/RJ가 도메인에 맞는
 경계를 만듭니다. 정본은 [docs/shmoo_model.md](docs/shmoo_model.md),
-원본 요구 프롬프트는 [todo.md](todo.md)에 있습니다. 코드는 아직
-미구현이며, 본 문서는 결정 반영 단계입니다.
+원본 요구 프롬프트는 [todo.md](todo.md)에 있습니다. 생성기는
+`src/shmoo/`에 구현되어 있습니다.
+
+### 미리보기 (seed 0, 16 layers, 150x200, 커버리지 50%)
+
+PASS=초록, FAIL=어두움. 레이어마다 폭/비대칭/커버리지가 다릅니다.
+
+![Shmoo layers](docs/images/shmoo_seed000.png)
+
+8개 패턴 파형의 eye diagram (RC 에지 + soft saturation):
+
+![Eye diagram](docs/images/eye_seed000.png)
+
+재생성:
+
+```bash
+pip install -r requirements.txt
+python tools/visualize_shmoo.py --selftest --seed 0
+```
 
 ## 정본 계약
 

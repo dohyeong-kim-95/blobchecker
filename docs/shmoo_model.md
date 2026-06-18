@@ -147,15 +147,31 @@ def generate_shmoo(
 파라미터 영향: ISI 탭↑ → 아이↓(+facet), RJ↑ → 경계 흐려짐, DCD↑ → 좌우
 비대칭, `sat_k`↑ → rail에 근접.
 
-## 모듈 계획 (미구현)
+## 모듈 (구현 완료 — `src/shmoo/`)
 
 | 모듈 | 책임 |
 |---|---|
-| `signal_gen.py` | RC 에지 파형, `soft_saturate` |
-| `channel_model.py` | 이산 ISI FIR 컨볼루션(인과) |
-| `jitter_model.py` | DCD(에지 위치), RJ(샘플 시점), 레이어별 skew |
-| `shmoo_eval.py` | `generate_shmoo`, MC 붕괴 pass/fail |
-| `plotting.py` | Shmoo 맵 + eye diagram (GitHub에서 볼 수 있는 산출물) |
+| `signal_gen.py` | RC 에지 파형(`reconstruct_waveform`), `soft_saturate` |
+| `channel_model.py` | 이산 ISI FIR 컨볼루션(인과, `apply_isi`) |
+| `jitter_model.py` | RJ 샘플(`sample_rj`), 패턴별 skew(`sample_skew`) |
+| `shmoo_eval.py` | `generate_shmoo`, `generate_dataset`, MC 붕괴, 커버리지 보정 |
+| `plotting.py` | Shmoo 맵 + eye diagram PNG |
+
+실행: `python tools/visualize_shmoo.py --selftest --seed 0` (셀프체크 +
+데이터 생성 + PNG → `docs/images/`).
+
+## 구현 노트 / 관측 (2026-06-18)
+
+- 셀프체크 통과: `received[17]` 인과 ISI 식 일치, MC 붕괴가 명시적
+  전수 AND와 비트 단위로 동일.
+- seed 0 기준 16레이어 생성 0.08s, 평균 커버리지 50.0% (레이어별 43~57%).
+- **수직 다양성은 약함**: `sat_k=10`이 중심 전압을 거의 0/1로 포화시켜
+  eye 높이가 대부분 ~568 mV(600 mV 창에 근접)로 비슷하다. 다양성은
+  주로 수평(폭 0.65~0.78 UI)과 커버리지로 나타난다. 수직 변화를 더
+  원하면 `sat_k`를 낮춘다.
+- **eye는 우측으로 비대칭**: 타겟 비트 leading 에지의 상승시간이 창의
+  좌측을 잠식하고 trailing 에지는 +0.5 경계에서 시작하므로 개구부가
+  대략 `[-0.2, +0.5] UI`로 치우친다. 물리적으로 정상이며 다양성에 기여.
 
 ## 구현 시 검증 체크리스트
 
