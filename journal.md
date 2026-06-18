@@ -391,6 +391,28 @@ Observations:
 
 Dropped `scipy` from requirements (no longer used); added `matplotlib`.
 
+## 2026-06-18 — Coverage Range [20%, 55%]
+
+Changed coverage from a single global 50% target to per-layer targets drawn
+uniformly from [20%, 55%], each hit by a per-layer calibrated guard band.
+
+Motivation: the fixed-50% eyes were large and similar, which over-emphasized
+the inherent left/right edge asymmetry. Mixing smaller eyes in adds diversity
+and tones the asymmetry down.
+
+Result (seed 0):
+
+```text
+mean coverage 38.1%  [min 21.0%, max 53.3%]
+eye height 270-600 mV, eye width 0.59-0.76 UI
+```
+
+Now both vertical (eye height) and horizontal (width) diversity are strong,
+unlike the fixed-50% case where height was nearly constant (~568 mV).
+
+API: `generate_dataset(..., coverage_range=(0.20, 0.55))`. A fixed `guard_v`
+still overrides calibration. CLI: `--coverage-range LO HI`.
+
 ## Durable Lessons
 
 1. Query strategy and reconstruction are coupled. Do not swap reconstruction

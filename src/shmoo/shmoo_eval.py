@@ -159,7 +159,7 @@ def generate_dataset(
     seed: int = 0,
     n_layers: int = 16,
     *,
-    target_coverage: float | None = 0.5,
+    coverage_range: tuple[float, float] = (0.20, 0.55),
     guard_v: float | None = None,
     cfg: ShmooConfig | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -171,42 +171,46 @@ def generate_dataset(
     truth_outlier_mask : (n_layers, H, W) uint8 — all zeros (no outliers)
     truth_full_mask    : (n_layers, H, W) uint8 — equals truth_blob_mask
 
-    Coverage is controlled by a single global guard band ``guard_v``. If
-    ``guard_v`` is None and ``target_coverage`` is set, the guard is calibrated
-    so the mean coverage across layers matches the target; per-layer coverage
-    then spreads around it.
+    Each layer is given an independent coverage target drawn uniformly from
+    ``coverage_range``; a per-layer guard band is then calibrated to hit it.
+    This spreads coverage across the range (more diversity, smaller eyes mixed
+    in). If ``guard_v`` is given, it overrides calibration with a fixed guard
+    for every layer.
     """
     cfg = cfg or ShmooConfig(H=H, W=W)
     cfg.H, cfg.W = H, W
 
     child_seeds = _child_seeds(seed, n_layers)
+    cov_targets = np.random.default_rng(seed * 2 + 1).uniform(
+        coverage_range[0], coverage_range[1], size=n_layers
+    )
 
-    # Envelopes are independent of the guard band, so compute them once.
-    envelopes = []
-    for cs in child_seeds:
+    masks = []
+    for i, cs in enumerate(child_seeds):
         rng = np.random.default_rng(cs)
         isi_scale = _layer_isi_scale(rng)
-        envelopes.append(layer_envelopes(rng, cfg, isi_scale=isi_scale))
+        # Envelopes are independent of the guard, so compute once per layer.
+        min_high, max_low = layer_envelopes(rng, cfg, isi_scale=isi_scale)
+        if guard_v is not None:
+            g = guard_v
+        else:
+            g = _calibrate_guard(
+                lambda gg, mh=min_high, ml=max_low: float(_threshold(mh, ml, cfg, gg).mean()),
+                cov_targets[i],
+            )
+        masks.append(_threshold(min_high, max_low, cfg, g))
 
-    def coverage(g: float) -> float:
-        total = sum(_threshold(mh, ml, cfg, g).mean() for mh, ml in envelopes)
-        return total / len(envelopes)
-
-    if guard_v is None and target_coverage is not None:
-        guard_v = _calibrate_guard(coverage, target_coverage)
-    elif guard_v is None:
-        guard_v = 0.0
-
-    blob = np.stack([_threshold(mh, ml, cfg, guard_v) for mh, ml in envelopes])
+    blob = np.stack(masks)
     out = np.zeros_like(blob)
     return blob, out, blob.copy()
 
 
-def _calibrate_guard(coverage_fn, target: float, lo: float = -0.45,
-                     hi: float = 0.45, iters: int = 28) -> float:
-    """Binary-search the guard band so mean coverage matches ``target``.
+def _calibrate_guard(coverage_fn, target: float, lo: float = -0.6,
+                     hi: float = 0.7, iters: int = 30) -> float:
+    """Binary-search the guard band so coverage matches ``target``.
 
-    Coverage decreases monotonically as the guard increases.
+    Coverage decreases monotonically as the guard increases. Negative guards
+    dilate the eye beyond the raw envelopes (for targets above raw coverage).
     """
     for _ in range(iters):
         mid = (lo + hi) / 2.0

@@ -19,9 +19,9 @@
 원본 요구 프롬프트는 [todo.md](todo.md)에 있습니다. 생성기는
 `src/shmoo/`에 구현되어 있습니다.
 
-### 미리보기 (seed 0, 16 layers, 150x200, 커버리지 50%)
+### 미리보기 (seed 0, 16 layers, 150x200, 커버리지 20~55%)
 
-PASS=초록, FAIL=어두움. 레이어마다 폭/비대칭/커버리지가 다릅니다.
+PASS=초록, FAIL=어두움. 레이어마다 크기/폭/비대칭/커버리지가 다릅니다.
 
 ![Shmoo layers](docs/images/shmoo_seed000.png)
 
@@ -46,7 +46,7 @@ python tools/visualize_shmoo.py --selftest --seed 0
 | 레이어 수 | 16 |
 | 그리드 | 150 x 200 (행=Vref, 열=timing) |
 | 데이터 도메인 | DRAM Shmoo Plot (PASS 영역 = blob) |
-| 커버리지 목표 | 50% (커버리지 래더 C1) |
+| 커버리지 | 레이어별 20%~55% 균등 분포 |
 | 구멍/이상치 | 없음 (`truth_outlier=0`, `truth_full==truth_blob`) |
 | Iteration cap | `int(0.15 * H * W)` = `150x200` 기준 4,500 |
 | Public seed suite | `[0..9]`, 개발/비교용 |

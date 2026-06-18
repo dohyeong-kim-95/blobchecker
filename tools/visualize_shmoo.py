@@ -129,7 +129,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Shmoo blob generator + viz.")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--n-layers", type=int, default=16)
-    parser.add_argument("--coverage", type=float, default=0.5)
+    parser.add_argument("--coverage-range", type=float, nargs=2,
+                        default=(0.20, 0.55), metavar=("LO", "HI"))
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--outdir", type=Path, default=ROOT / "docs" / "images")
     args = parser.parse_args()
@@ -141,13 +142,14 @@ def main() -> None:
     t0 = time.perf_counter()
     blob, out, full = generate_dataset(
         H=cfg.H, W=cfg.W, seed=args.seed, n_layers=args.n_layers,
-        target_coverage=args.coverage, cfg=cfg,
+        coverage_range=tuple(args.coverage_range), cfg=cfg,
     )
     elapsed = time.perf_counter() - t0
 
     coverages = blob.reshape(args.n_layers, -1).mean(axis=1)
+    lo, hi = args.coverage_range
     print(f"\ngenerated {blob.shape} in {elapsed:.2f}s  "
-          f"(seed={args.seed}, target cov={args.coverage:.0%})")
+          f"(seed={args.seed}, cov range {lo:.0%}-{hi:.0%})")
     print(f"mean coverage {coverages.mean()*100:.1f}%  "
           f"[min {coverages.min()*100:.1f}%, max {coverages.max()*100:.1f}%]")
     assert np.array_equal(full, blob) and out.sum() == 0, "contract: full==blob, no outliers"
