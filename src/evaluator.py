@@ -23,7 +23,7 @@ ACCURACY_THRESHOLD = 0.98
 # ---------------------------------------------------------------------------
 
 def _per_layer_accuracy(predicted: np.ndarray, truth: np.ndarray) -> np.ndarray:
-    """mean(predicted == truth) over H×W, per layer. Returns shape (8,)."""
+    """mean(predicted == truth) over H×W, per layer. Returns shape (n_layers,)."""
     return np.mean(predicted == truth, axis=(1, 2))
 
 
@@ -56,23 +56,24 @@ def _bbox_passes(pred2d, truth2d, phase=0):
 class EvalResult:
     seed: int = 0
     phase: str = "phase0"
-    grid_shape: tuple = (50, 200)
+    grid_shape: tuple = (150, 200)
+    n_layers: int = 16
     iteration_cap: int = 0
     iterations_used: int = 0
 
-    # Per-layer metrics  (length-8 arrays)
-    per_layer_accuracy: np.ndarray = field(default_factory=lambda: np.zeros(8))
-    height_truth: np.ndarray = field(default_factory=lambda: np.zeros(8, int))
-    height_pred: np.ndarray = field(default_factory=lambda: np.zeros(8, int))
-    width_truth: np.ndarray = field(default_factory=lambda: np.zeros(8, int))
-    width_pred: np.ndarray = field(default_factory=lambda: np.zeros(8, int))
-    height_pass: np.ndarray = field(default_factory=lambda: np.zeros(8, bool))
-    width_pass: np.ndarray = field(default_factory=lambda: np.zeros(8, bool))
-    accuracy_pass: np.ndarray = field(default_factory=lambda: np.zeros(8, bool))
+    # Per-layer metrics — length n_layers; defaults sized for n_layers=16
+    per_layer_accuracy: np.ndarray = field(default_factory=lambda: np.zeros(16))
+    height_truth: np.ndarray = field(default_factory=lambda: np.zeros(16, int))
+    height_pred: np.ndarray = field(default_factory=lambda: np.zeros(16, int))
+    width_truth: np.ndarray = field(default_factory=lambda: np.zeros(16, int))
+    width_pred: np.ndarray = field(default_factory=lambda: np.zeros(16, int))
+    height_pass: np.ndarray = field(default_factory=lambda: np.zeros(16, bool))
+    width_pass: np.ndarray = field(default_factory=lambda: np.zeros(16, bool))
+    accuracy_pass: np.ndarray = field(default_factory=lambda: np.zeros(16, bool))
     overall_pass: bool = False
 
-    # Accuracy curve: shape (iterations_used, 8)
-    accuracy_curve: np.ndarray = field(default_factory=lambda: np.empty((0, 8)))
+    # Accuracy curve: shape (iterations_used, n_layers)
+    accuracy_curve: np.ndarray = field(default_factory=lambda: np.empty((0, 16)))
 
     elapsed_seconds: float = 0.0
 
@@ -88,7 +89,7 @@ class EvalResult:
             f"{'h_truth':>7}  {'h_pred':>6}  {'h_ok':>4}  "
             f"{'w_truth':>7}  {'w_pred':>6}  {'w_ok':>4}",
         ]
-        for k in range(8):
+        for k in range(len(self.per_layer_accuracy)):
             lines.append(
                 f"  {k:>5}  {self.per_layer_accuracy[k]:>9.4f}  "
                 f"{str(self.accuracy_pass[k]):>6}  "
@@ -113,9 +114,9 @@ class Evaluator:
     """
 
     def __init__(self, truth_blob_mask, truth_outlier_mask, truth_full_mask):
-        self.truth_blob = truth_blob_mask       # (8, H, W)
-        self.truth_out = truth_outlier_mask     # (8, H, W)
-        self.truth_full = truth_full_mask       # (8, H, W)
+        self.truth_blob = truth_blob_mask       # (n_layers, H, W)
+        self.truth_out = truth_outlier_mask     # (n_layers, H, W)
+        self.truth_full = truth_full_mask       # (n_layers, H, W)
         _, self.H, self.W = truth_full_mask.shape
         self.n_layers = truth_full_mask.shape[0]
         self.iteration_cap = int(0.15 * self.H * self.W)
@@ -128,7 +129,7 @@ class Evaluator:
             row, col = algorithm.next_query()
             labels   = oracle.query(row, col)
             algorithm.update(row, col, labels)
-            predicted = algorithm.predict()   # (8, H, W) uint8
+            predicted = algorithm.predict()   # (n_layers, H, W) uint8
         """
         oracle = Oracle(self.truth_full)
         curve: List[np.ndarray] = []
@@ -149,10 +150,11 @@ class Evaluator:
             seed=seed,
             phase=f"phase{phase}",
             grid_shape=(self.H, self.W),
+            n_layers=self.n_layers,
             iteration_cap=self.iteration_cap,
             iterations_used=self.iteration_cap,
             per_layer_accuracy=final_acc,
-            accuracy_curve=np.array(curve),   # (n_iter, 8)
+            accuracy_curve=np.array(curve),   # (n_iter, n_layers)
             elapsed_seconds=elapsed,
         )
 
