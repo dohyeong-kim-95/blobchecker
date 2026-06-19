@@ -50,8 +50,13 @@ def plot_shmoo_grid(blob: np.ndarray, cfg: ShmooConfig, path: Path,
 
 
 def plot_eye_diagram(waves, cfg: ShmooConfig, path: Path,
-                     *, layer: int = 0) -> Path:
-    """Overlay the 8 pattern waveforms over [-0.5, +0.5] UI around the target.
+                     *, layer: int = 0, half_width: float = 1.0) -> Path:
+    """Overlay the 8 pattern waveforms over a ±half_width UI window.
+
+    The sampling window [timing_lo, timing_hi] is shown as vertical dashed
+    lines. Using half_width=1.0 (default) places both the leading and trailing
+    bit transitions fully inside the plot, avoiding the cliff artifact that
+    appears when the window is cut exactly at the bit boundaries.
 
     ``waves`` is a list of ``(pattern, t_axis, wave)`` from
     ``layer_envelopes(..., collect_waves=True)``.
@@ -65,16 +70,19 @@ def plot_eye_diagram(waves, cfg: ShmooConfig, path: Path,
     center = cfg.target_center
     for i, (pattern, t_axis, wave) in enumerate(waves):
         rel = t_axis - center
-        sel = (rel >= cfg.timing_lo) & (rel <= cfg.timing_hi)
+        sel = (rel >= -half_width) & (rel <= half_width)
         label = "".join(str(b) for b in pattern)
         ax.plot(rel[sel], wave[sel] * 1000, color=cmap(i % 10), label=label, lw=1.6)
 
+    # Sampling window boundaries
+    ax.axvline(cfg.timing_lo, ls=":", color="#d1d5db", lw=1.2, label="sampling window")
+    ax.axvline(cfg.timing_hi, ls=":", color="#d1d5db", lw=1.2)
     ax.axhline(500, ls="--", color="#6b7280", lw=1, label="Vref=500mV")
     ax.axvline(0.0, ls="--", color="#9ca3af", lw=1)
     ax.set_xlabel("timing offset (UI)")
     ax.set_ylabel("voltage (mV)")
-    ax.set_title(f"Eye Diagram — layer {layer} (8 patterns, soft-saturated)")
-    ax.set_xlim(cfg.timing_lo, cfg.timing_hi)
+    ax.set_title(f"Eye Diagram — layer {layer} (8 patterns, soft-saturated, ±{half_width} UI)")
+    ax.set_xlim(-half_width, half_width)
     ax.set_ylim(-50, 1050)
     ax.legend(ncol=3, fontsize=8, loc="center right")
     fig.tight_layout()
